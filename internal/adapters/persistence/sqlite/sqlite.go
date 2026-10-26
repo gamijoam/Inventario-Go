@@ -31,12 +31,17 @@ const (
 	OpenOrCreate
 )
 
-// Pragmas aplicados a cada conexión (sección 10.4, a validar en pruebas):
-//   - foreign_keys: SQLite no aplica FKs por defecto.
-//   - journal_mode=WAL: lectores concurrentes con un escritor.
-//   - synchronous=FULL: durabilidad ante cortes de energía, a costa de velocidad.
+// Pragmas aplicados a cada conexión (sección 10.4):
 //   - busy_timeout: espera al escritor en lugar de fallar con SQLITE_BUSY.
-var pragmas = []string{"foreign_keys(1)", "journal_mode(WAL)", "synchronous(FULL)", "busy_timeout(5000)"}
+//   - foreign_keys: SQLite no aplica FKs por defecto.
+//   - synchronous=FULL: durabilidad ante cortes de energía, a costa de velocidad.
+//
+// journal_mode=WAL no va aquí: es persistente en el archivo y se fija una
+// vez en Open (ver enableWAL).
+var pragmas = []string{"busy_timeout(5000)", "foreign_keys(1)", "synchronous(FULL)"}
+
+// walDeadline limita la espera para convertir una base nueva a WAL.
+const walDeadline = 10 * time.Second
 
 // Open abre la base en path y verifica que los pragmas quedaron activos.
 func Open(ctx context.Context, path string, mode Mode) (*sql.DB, error) {
@@ -63,6 +68,10 @@ func Open(ctx context.Context, path string, mode Mode) (*sql.DB, error) {
 	if err != nil {
 		return nil, err
 	}
+	if err := enableWAL(ctx, db); err != nil {
+		_ = db.Close()
+		return nil, err
+	}
 	if err := verify(ctx, db); err != nil {
 		_ = db.Close()
 		return nil, err
@@ -72,6 +81,38 @@ func Open(ctx context.Context, path string, mode Mode) (*sql.DB, error) {
 		_ = os.Chmod(path, 0o600)
 	}
 	return db, nil
+}
+
+// enableWAL activa journal_mode=WAL. Cambiar el modo requiere un bloqueo
+// exclusivo que no respeta busy_timeout: si varios procesos abren a la vez
+// una base nueva, los demás reciben SQLITE_BUSY. Como el modo queda
+// guardado en el archivo, basta reintentar hasta que uno lo logre.
+func enableWAL(ctx context.Context, db *sql.DB) error {
+	deadline := time.Now().Add(walDeadline)
+	for wait := 5 * time.Millisecond; ; wait = min(wait*2, 200*time.Millisecond) {
+		var mode string
+		err := db.QueryRowContext(ctx, "PRAGMA journal_mode=WAL").Scan(&mode)
+		if err == nil && mode == "wal" {
+			return nil
+		}
+		if err != nil && !isBusy(err) {
+			return fmt.Errorf("abrir SQLite: %w", err)
+		}
+		if time.Now().After(deadline) {
+			return fmt.Errorf("abrir SQLite: no se pudo activar WAL (modo %q): %v", mode, err)
+		}
+		select {
+		case <-ctx.Done():
+			return ctx.Err()
+		case <-time.After(wait):
+		}
+	}
+}
+
+func isBusy(err error) bool {
+	var se interface{ Code() int }
+	// SQLITE_BUSY (5) y SQLITE_LOCKED (6), incluidos sus códigos extendidos.
+	return errors.As(err, &se) && (se.Code()&0xff == 5 || se.Code()&0xff == 6)
 }
 
 func verify(ctx context.Context, db *sql.DB) error {

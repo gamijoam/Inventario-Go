@@ -8,6 +8,7 @@ import (
 	"os"
 	"path/filepath"
 	"runtime"
+	"sync"
 	"testing"
 
 	"github.com/gamijoam/inventario-go/internal/adapters/persistence/sqlite"
@@ -45,6 +46,35 @@ func TestOpenAppliesPragmasOnEveryConnection(t *testing.T) {
 			t.Errorf("conexión %d: busy_timeout=%d, %v", i, timeout, err)
 		}
 		_ = c.Close()
+	}
+}
+
+// Regresión: varias aperturas simultáneas de una base nueva compiten por
+// convertirla a WAL; ninguna debe fallar con SQLITE_BUSY.
+func TestConcurrentOpenOfNewDatabase(t *testing.T) {
+	for round := range 20 {
+		path := filepath.Join(t.TempDir(), "bp.db")
+		const openers = 16
+		errs := make(chan error, openers)
+		var wg sync.WaitGroup
+		for range openers {
+			wg.Add(1)
+			go func() {
+				defer wg.Done()
+				db, err := sqlite.Open(context.Background(), path, sqlite.OpenOrCreate)
+				if err == nil {
+					err = db.Close()
+				}
+				errs <- err
+			}()
+		}
+		wg.Wait()
+		close(errs)
+		for err := range errs {
+			if err != nil {
+				t.Fatalf("ronda %d: apertura concurrente falló: %v", round, err)
+			}
+		}
 	}
 }
 

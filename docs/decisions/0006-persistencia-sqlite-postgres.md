@@ -20,10 +20,14 @@ compilan para Linux y Windows desde Linux con `CGO_ENABLED=0` (ADR-0001).
    (`stdlib`), para compartir el migrador con SQLite. Su dependencia
    `golang.org/x/text` se fija en v0.42.0: la v0.29.0 que trae por defecto
    tiene avisos alcanzables (GO-2026-6629, GO-2026-5970).
-3. **SQLite, cada conexión:** `foreign_keys=ON`, `journal_mode=WAL`,
-   `synchronous=FULL`, `busy_timeout=5000` y `BEGIN IMMEDIATE` en
-   transacciones (`_txlock=immediate`). Se verifica al abrir que quedaron
-   activos. Archivo con permisos 0600 y directorio con 0700.
+3. **SQLite, cada conexión:** `busy_timeout=5000`, `foreign_keys=ON`,
+   `synchronous=FULL` y `BEGIN IMMEDIATE` en transacciones
+   (`_txlock=immediate`). `journal_mode=WAL` es persistente en el archivo y
+   se activa una vez al abrir, reintentando ante `SQLITE_BUSY`: el cambio de
+   modo no respeta `busy_timeout`, y varias aperturas simultáneas de una
+   base nueva fallaban (regresión detectada en CI y cubierta por prueba).
+   Se verifica al abrir que todo quedó activo. Archivo con permisos 0600 y
+   directorio con 0700.
 4. **PostgreSQL, cada sesión:** `timezone=UTC`; tiempo de conexión de 5 s por
    defecto. Los errores no incluyen la contraseña y se reducen a una línea.
 5. **Migraciones propias** (`internal/platform/migration`), sin bibliotecas:
