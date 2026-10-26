@@ -66,8 +66,12 @@ func Execute(ctx context.Context, args []string, env Env) int {
 	}
 	code := ExitFailure
 	kind := "failure"
-	if errors.As(err, &exit) {
+	switch {
+	case errors.As(err, &exit):
 		code, kind = exit.code, exit.kind
+	case strings.HasPrefix(err.Error(), "required flag"):
+		// Cobra no pasa los flags obligatorios faltantes por SetFlagErrorFunc.
+		code, kind = ExitUsage, "usage"
 	}
 	// Si el análisis de flags falló, flags.json puede no estar asignado.
 	if flags.json || containsFlag(args, "--json") {
@@ -122,7 +126,8 @@ func newRootCmd(env Env, flags *globalFlags) *cobra.Command {
 	root.PersistentFlags().StringVar(&flags.logLevel, "log-level", "", "nivel de log: debug, info, warn o error")
 	root.SetFlagErrorFunc(func(_ *cobra.Command, err error) error { return usageErrorf("%s", err) })
 
-	root.AddCommand(newVersionCmd(flags), newDoctorCmd(env, flags), newConfigCmd(env, flags), newDBCmd(env, flags))
+	root.AddCommand(newVersionCmd(flags), newDoctorCmd(env, flags), newConfigCmd(env, flags), newDBCmd(env, flags),
+		newSetupCmd(env, flags), newOrgCmd(env, flags), newCompanyCmd(env, flags), newBranchCmd(env, flags), newWarehouseCmd(env, flags))
 	return root
 }
 

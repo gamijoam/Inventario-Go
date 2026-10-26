@@ -228,8 +228,9 @@ func TestEngineCheckConstraint(t *testing.T) {
 func TestDownThenUpRestoresSchema(t *testing.T) {
 	forEachEngine(t, func(t *testing.T, cfg config.Database) {
 		s, r := migrated(t, cfg)
-		down, err := r.Down(ctx(t), 1)
-		if err != nil || len(down) != 1 {
+		// Revertir todas, de la más nueva a la más antigua.
+		down, err := r.Down(ctx(t), len(r.Migrations))
+		if err != nil || len(down) != len(r.Migrations) || down[0].Version != len(r.Migrations) {
 			t.Fatalf("Down = %d, %v", len(down), err)
 		}
 		if _, err := s.DB.ExecContext(ctx(t), "SELECT 1 FROM installation"); err == nil {

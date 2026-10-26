@@ -7,8 +7,20 @@ import (
 	"testing"
 
 	"github.com/gamijoam/inventario-go/internal/adapters/cli"
+	"github.com/gamijoam/inventario-go/internal/platform/migration"
 	"github.com/gamijoam/inventario-go/internal/testutil/pgtest"
+	"github.com/gamijoam/inventario-go/migrations"
 )
+
+// migrationCount es el número de migraciones embebidas del motor SQLite.
+func migrationCount(t *testing.T) int {
+	t.Helper()
+	migs, err := migration.Load(migrations.FS, "sqlite")
+	if err != nil {
+		t.Fatal(err)
+	}
+	return len(migs)
+}
 
 func sqliteEnv(t *testing.T) (runOpts, string) {
 	t.Helper()
@@ -26,7 +38,7 @@ func TestDBStatusBeforeMigrateDoesNotCreateTheDatabase(t *testing.T) {
 		t.Fatalf("db status no debe crear la base: %v", err)
 	}
 	v := decode(t, run(t, o, "db", "status", "--json").stdout)
-	if v["schema"] != "balanzapro.db-status/v1" || v["initialized"] != false || len(v["pending"].([]any)) != 1 {
+	if v["schema"] != "balanzapro.db-status/v1" || v["initialized"] != false || len(v["pending"].([]any)) != migrationCount(t) {
 		t.Fatalf("payload = %v", v)
 	}
 }
@@ -38,7 +50,7 @@ func TestDBMigrateIsIdempotentAndKeepsInstallationID(t *testing.T) {
 		t.Fatalf("code=%d stderr=%s", r.code, r.stderr)
 	}
 	first := decode(t, r.stdout)
-	if first["schema"] != "balanzapro.db-migrate/v1" || first["installation_created"] != true || len(first["applied"].([]any)) != 1 || first["backup"] != "" {
+	if first["schema"] != "balanzapro.db-migrate/v1" || first["installation_created"] != true || len(first["applied"].([]any)) != migrationCount(t) || first["backup"] != "" {
 		t.Fatalf("primera migración = %v", first)
 	}
 	if _, err := os.Stat(path); err != nil {
@@ -51,7 +63,7 @@ func TestDBMigrateIsIdempotentAndKeepsInstallationID(t *testing.T) {
 	}
 
 	st := decode(t, run(t, o, "db", "status", "--json").stdout)
-	if st["initialized"] != true || st["installation_id"] != first["installation_id"] || len(st["applied"].([]any)) != 1 || len(st["pending"].([]any)) != 0 {
+	if st["initialized"] != true || st["installation_id"] != first["installation_id"] || len(st["applied"].([]any)) != migrationCount(t) || len(st["pending"].([]any)) != 0 {
 		t.Fatalf("status = %v", st)
 	}
 	if !strings.Contains(st["server"].(string), "journal wal") {
