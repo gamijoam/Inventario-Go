@@ -72,9 +72,23 @@ agregue al repositorio.
   `pin`, `token`, `secret`, `dsn`, `authorization`…), los valores de tipo
   secreto y la contraseña de cualquier URL con credenciales.
 
+## Base de datos
+
+```sh
+balanzapro db status    # motor, conexión, instalación y migraciones (no modifica nada)
+balanzapro db migrate   # crea la base SQLite si no existe y aplica migraciones
+```
+
+En SQLite, si la base ya tenía migraciones y hay nuevas, `db migrate` crea
+antes un respaldo `bp.db.pre-NNNN-AAAAMMDDTHHMMSSZ.bak` junto al archivo. En
+PostgreSQL, respalde antes con `pg_dump`.
+
 ## Códigos de salida relacionados
 
 - `4`: configuración inválida (archivo ilegible, TOML mal formado, clave
   desconocida o valor fuera de rango). Los mensajes indican línea y clave,
   nunca el contenido del secreto.
-- `doctor` reporta la configuración inválida como `[FAIL] config` (código 3).
+- `5`: no se pudo conectar con la base de datos (`db status`, `db migrate`).
+- `doctor` reporta la configuración inválida como `[FAIL] config` y la base
+  inaccesible como `[FAIL] database` (código 3); una base sin inicializar o
+  con migraciones pendientes es `[WARN] database`.
