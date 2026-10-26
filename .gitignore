@@ -1,0 +1,27 @@
+# Binarios y artefactos de compilación
+/bin/
+/dist/
+*.exe
+*.test
+*.out
+coverage.*
+
+# Bases de datos y respaldos locales: nunca al repositorio
+*.db
+*.db-wal
+*.db-shm
+*.sqlite
+*.sqlite3
+/backups/
+
+# Configuración local y secretos
+.env
+.env.*
+*.local.yaml
+*.local.toml
+
+# Editores y sistema
+.idea/
+.vscode/
+.DS_Store
+Thumbs.db

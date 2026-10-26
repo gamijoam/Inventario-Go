@@ -1,0 +1,91 @@
+name: CI
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: ci-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  checks:
+    name: Formato, vet y dependencias
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-go@v5
+        with:
+          go-version-file: go.mod
+      - name: gofmt
+        run: |
+          unformatted="$(gofmt -l .)"
+          if [ -n "$unformatted" ]; then
+            echo "Archivos sin gofmt:"; echo "$unformatted"; exit 1
+          fi
+      - name: go mod tidy sin cambios
+        run: |
+          go mod tidy
+          git diff --exit-code go.mod go.sum
+      - name: go vet (Linux y Windows)
+        run: |
+          go vet ./...
+          GOOS=windows go vet ./...
+      - name: Dominio sin dependencias de otras capas
+        run: ./scripts/check-domain-deps.sh
+
+  test:
+    name: Pruebas (${{ matrix.os }})
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [ubuntu-latest, windows-latest]
+    runs-on: ${{ matrix.os }}
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-go@v5
+        with:
+          go-version-file: go.mod
+      - name: go test
+        run: go test ./...
+      - name: go test -race
+        if: runner.os == 'Linux'
+        run: go test -race ./...
+
+  build:
+    name: Compilación ${{ matrix.goos }}/${{ matrix.goarch }}
+    needs: [checks]
+    strategy:
+      matrix:
+        include:
+          - goos: linux
+            goarch: amd64
+          - goos: windows
+            goarch: amd64
+    runs-on: ubuntu-latest
+    env:
+      CGO_ENABLED: "0"
+      GOOS: ${{ matrix.goos }}
+      GOARCH: ${{ matrix.goarch }}
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-go@v5
+        with:
+          go-version-file: go.mod
+      - name: go build
+        run: go build ./...
+
+  security:
+    name: Vulnerabilidades
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-go@v5
+        with:
+          go-version-file: go.mod
+      - name: govulncheck
+        run: go run golang.org/x/vuln/cmd/govulncheck@v1.1.4 ./...
