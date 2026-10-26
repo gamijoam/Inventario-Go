@@ -20,6 +20,11 @@ const (
 	// ExitNotFound: el recurso no existe o no es visible en el ámbito, o la
 	// instalación no tiene organización configurada.
 	ExitNotFound = 7
+	// ExitForbidden: el usuario no tiene el permiso en ese ámbito.
+	ExitForbidden = 8
+	// ExitUnauthenticated: no hay sesión válida, o las credenciales son
+	// incorrectas.
+	ExitUnauthenticated = 9
 )
 
 // exitError asocia un error con su código de salida. Si silent es true, el

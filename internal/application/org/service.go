@@ -2,10 +2,10 @@
 // alta inicial de una instalación y gestión de empresas, sucursales y
 // almacenes.
 //
-// Cada operación recibe el ámbito del actor (scope.BusinessScope) y solo ve
-// o modifica entidades dentro de su organización. Las búsquedas fuera del
-// ámbito devuelven ErrNotFound, sin revelar si el recurso existe
-// (sección 22.8, punto 3).
+// Cada operación recibe el principal autenticado (identity.Principal) y
+// comprueba el permiso de la operación en el ámbito del recurso. Las
+// búsquedas fuera de lo visible devuelven ErrNotFound, sin revelar si el
+// recurso existe (sección 22.8, punto 3).
 package org
 
 import (
@@ -15,6 +15,7 @@ import (
 	"time"
 
 	"github.com/gamijoam/inventario-go/internal/domain/id"
+	"github.com/gamijoam/inventario-go/internal/domain/identity"
 	"github.com/gamijoam/inventario-go/internal/domain/org"
 	"github.com/gamijoam/inventario-go/internal/domain/scope"
 )
@@ -90,11 +91,6 @@ type Context struct {
 	Branch       org.Branch
 }
 
-// Scope es el ámbito de administración local de la instalación: su
-// organización. Hasta BP-M1-002 (usuarios y permisos) es el ámbito con el
-// que actúa la CLI local.
-func (c Context) Scope() scope.BusinessScope { return c.Organization.Scope() }
-
 // Bootstrapped es el resultado del alta inicial.
 type Bootstrapped struct {
 	Context
@@ -104,7 +100,18 @@ type Bootstrapped struct {
 // Bootstrap crea organización, empresa, sucursal y almacén y asocia la
 // instalación, en una sola transacción (sección 22.7).
 func (s *Service) Bootstrap(ctx context.Context, in BootstrapInput) (Bootstrapped, error) {
-	now := s.now()
+	var out Bootstrapped
+	err := s.store.InTx(ctx, func(r Repository) error {
+		var err error
+		out, err = BootstrapTx(ctx, r, in, s.now())
+		return err
+	})
+	return out, err
+}
+
+// BootstrapTx es Bootstrap dentro de una transacción ajena, para que el alta
+// de usuarios (BP-M1-002) ocurra en la misma unidad de trabajo.
+func BootstrapTx(ctx context.Context, r Repository, in BootstrapInput, now time.Time) (Bootstrapped, error) {
 	var rif org.RIF
 	if in.RIF != "" {
 		var err error
@@ -129,25 +136,22 @@ func (s *Service) Bootstrap(ctx context.Context, in BootstrapInput) (Bootstrappe
 		return Bootstrapped{}, err
 	}
 
-	err = s.store.InTx(ctx, func(r Repository) error {
-		if _, err := r.Binding(ctx); err == nil {
-			return ErrAlreadyBootstrapped
-		} else if !errors.Is(err, ErrNotBootstrapped) {
-			return err
+	if _, err := r.Binding(ctx); err == nil {
+		return Bootstrapped{}, ErrAlreadyBootstrapped
+	} else if !errors.Is(err, ErrNotBootstrapped) {
+		return Bootstrapped{}, err
+	}
+	for _, insert := range []func() error{
+		func() error { return r.InsertOrganization(ctx, o) },
+		func() error { return r.InsertCompany(ctx, c) },
+		func() error { return r.InsertBranch(ctx, b) },
+		func() error { return r.InsertWarehouse(ctx, w) },
+	} {
+		if err := insert(); err != nil {
+			return Bootstrapped{}, err
 		}
-		for _, insert := range []func() error{
-			func() error { return r.InsertOrganization(ctx, o) },
-			func() error { return r.InsertCompany(ctx, c) },
-			func() error { return r.InsertBranch(ctx, b) },
-			func() error { return r.InsertWarehouse(ctx, w) },
-		} {
-			if err := insert(); err != nil {
-				return err
-			}
-		}
-		return r.Bind(ctx, Binding{OrganizationID: o.ID, CompanyID: c.ID, BranchID: b.ID})
-	})
-	if err != nil {
+	}
+	if err := r.Bind(ctx, Binding{OrganizationID: o.ID, CompanyID: c.ID, BranchID: b.ID}); err != nil {
 		return Bootstrapped{}, err
 	}
 	return Bootstrapped{Context: Context{Organization: o, Company: c, Branch: b}, Warehouse: w}, nil
@@ -157,24 +161,46 @@ func (s *Service) Bootstrap(ctx context.Context, in BootstrapInput) (Bootstrappe
 func (s *Service) Current(ctx context.Context) (Context, error) {
 	var out Context
 	err := s.store.InTx(ctx, func(r Repository) error {
-		bind, err := r.Binding(ctx)
-		if err != nil {
-			return err
-		}
-		if out.Organization, err = r.Organization(ctx, bind.OrganizationID); err != nil {
-			return err
-		}
-		if out.Company, err = r.Company(ctx, bind.OrganizationID, bind.CompanyID); err != nil {
-			return err
-		}
-		out.Branch, err = r.Branch(ctx, bind.OrganizationID, bind.CompanyID, bind.BranchID)
+		var err error
+		out, err = CurrentTx(ctx, r)
 		return err
 	})
 	return out, err
 }
 
+// Overview es Current para un principal que puede ver la estructura.
+func (s *Service) Overview(ctx context.Context, p identity.Principal) (Context, error) {
+	var out Context
+	err := s.store.InTx(ctx, func(r Repository) error {
+		if _, err := s.organization(ctx, r, p); err != nil {
+			return err
+		}
+		var err error
+		out, err = CurrentTx(ctx, r)
+		return err
+	})
+	return out, err
+}
+
+// CurrentTx es Current dentro de una transacción ajena.
+func CurrentTx(ctx context.Context, r Repository) (Context, error) {
+	var out Context
+	bind, err := r.Binding(ctx)
+	if err != nil {
+		return out, err
+	}
+	if out.Organization, err = r.Organization(ctx, bind.OrganizationID); err != nil {
+		return out, err
+	}
+	if out.Company, err = r.Company(ctx, bind.OrganizationID, bind.CompanyID); err != nil {
+		return out, err
+	}
+	out.Branch, err = r.Branch(ctx, bind.OrganizationID, bind.CompanyID, bind.BranchID)
+	return out, err
+}
+
 // CreateCompany crea una empresa legal; requiere un ámbito de organización.
-func (s *Service) CreateCompany(ctx context.Context, actor scope.BusinessScope, code, legalName, rif string) (org.Company, error) {
+func (s *Service) CreateCompany(ctx context.Context, p identity.Principal, code, legalName, rif string) (org.Company, error) {
 	var parsed org.RIF
 	if rif != "" {
 		var err error
@@ -184,15 +210,15 @@ func (s *Service) CreateCompany(ctx context.Context, actor scope.BusinessScope, 
 	}
 	var c org.Company
 	err := s.store.InTx(ctx, func(r Repository) error {
-		o, err := s.organization(ctx, r, actor)
+		o, err := r.Organization(ctx, p.OrganizationID)
 		if err != nil {
 			return err
 		}
 		if c, err = org.NewCompany(o, code, legalName, parsed, s.now()); err != nil {
 			return err
 		}
-		if !actor.Contains(c.Scope()) {
-			return fmt.Errorf("%w: crear empresas requiere ámbito de organización", ErrForbidden)
+		if err := p.Authorize(identity.PermCompanyCreate, c.Scope(), "la organización "+o.Code.String()); err != nil {
+			return err
 		}
 		return r.InsertCompany(ctx, c)
 	})
@@ -200,10 +226,10 @@ func (s *Service) CreateCompany(ctx context.Context, actor scope.BusinessScope, 
 }
 
 // CreateBranch crea una sucursal en la empresa companyCode.
-func (s *Service) CreateBranch(ctx context.Context, actor scope.BusinessScope, companyCode, code, name string) (org.Branch, error) {
+func (s *Service) CreateBranch(ctx context.Context, p identity.Principal, companyCode, code, name string) (org.Branch, error) {
 	var b org.Branch
 	err := s.store.InTx(ctx, func(r Repository) error {
-		c, err := s.company(ctx, r, actor, companyCode)
+		c, err := s.company(ctx, r, p, companyCode)
 		if err != nil {
 			return err
 		}
@@ -213,8 +239,8 @@ func (s *Service) CreateBranch(ctx context.Context, actor scope.BusinessScope, c
 		if b, err = org.NewBranch(c, code, name, s.now()); err != nil {
 			return err
 		}
-		if !actor.Contains(b.Scope()) {
-			return fmt.Errorf("%w: crear sucursales requiere ámbito de empresa", ErrForbidden)
+		if err := p.Authorize(identity.PermBranchCreate, b.Scope(), "la empresa "+c.Code.String()); err != nil {
+			return err
 		}
 		return r.InsertBranch(ctx, b)
 	})
@@ -222,10 +248,10 @@ func (s *Service) CreateBranch(ctx context.Context, actor scope.BusinessScope, c
 }
 
 // CreateWarehouse crea un almacén en la sucursal branchCode de companyCode.
-func (s *Service) CreateWarehouse(ctx context.Context, actor scope.BusinessScope, companyCode, branchCode, code, name string) (org.Warehouse, error) {
+func (s *Service) CreateWarehouse(ctx context.Context, p identity.Principal, companyCode, branchCode, code, name string) (org.Warehouse, error) {
 	var w org.Warehouse
 	err := s.store.InTx(ctx, func(r Repository) error {
-		b, err := s.branch(ctx, r, actor, companyCode, branchCode)
+		b, err := s.branch(ctx, r, p, companyCode, branchCode)
 		if err != nil {
 			return err
 		}
@@ -235,50 +261,50 @@ func (s *Service) CreateWarehouse(ctx context.Context, actor scope.BusinessScope
 		if w, err = org.NewWarehouse(b, code, name, s.now()); err != nil {
 			return err
 		}
-		if !actor.Contains(w.Scope()) {
-			return fmt.Errorf("%w: crear almacenes requiere ámbito de sucursal", ErrForbidden)
+		if err := p.Authorize(identity.PermWarehouseCreate, w.Scope(), "la sucursal "+b.Code.String()); err != nil {
+			return err
 		}
 		return r.InsertWarehouse(ctx, w)
 	})
 	return w, err
 }
 
-// ListCompanies devuelve las empresas visibles para el actor.
-func (s *Service) ListCompanies(ctx context.Context, actor scope.BusinessScope) ([]org.Company, error) {
+// ListCompanies devuelve las empresas visibles para el principal.
+func (s *Service) ListCompanies(ctx context.Context, p identity.Principal) ([]org.Company, error) {
 	var out []org.Company
 	err := s.store.InTx(ctx, func(r Repository) error {
-		if _, err := s.organization(ctx, r, actor); err != nil {
+		if _, err := s.organization(ctx, r, p); err != nil {
 			return err
 		}
-		all, err := r.Companies(ctx, actor.Organization())
+		all, err := r.Companies(ctx, p.OrganizationID)
 		if err != nil {
 			return err
 		}
-		out = filter(all, actor, org.Company.Scope)
+		out = filter(all, p, org.Company.Scope)
 		return nil
 	})
 	return out, err
 }
 
 // ListBranches devuelve las sucursales visibles; companyCode vacío = todas.
-func (s *Service) ListBranches(ctx context.Context, actor scope.BusinessScope, companyCode string) ([]org.Branch, error) {
+func (s *Service) ListBranches(ctx context.Context, p identity.Principal, companyCode string) ([]org.Branch, error) {
 	var out []org.Branch
 	err := s.store.InTx(ctx, func(r Repository) error {
 		var companyID id.ID
 		if companyCode != "" {
-			c, err := s.company(ctx, r, actor, companyCode)
+			c, err := s.company(ctx, r, p, companyCode)
 			if err != nil {
 				return err
 			}
 			companyID = c.ID
-		} else if _, err := s.organization(ctx, r, actor); err != nil {
+		} else if _, err := s.organization(ctx, r, p); err != nil {
 			return err
 		}
-		all, err := r.Branches(ctx, actor.Organization(), companyID)
+		all, err := r.Branches(ctx, p.OrganizationID, companyID)
 		if err != nil {
 			return err
 		}
-		out = filter(all, actor, org.Branch.Scope)
+		out = filter(all, p, org.Branch.Scope)
 		return nil
 	})
 	return out, err
@@ -286,67 +312,69 @@ func (s *Service) ListBranches(ctx context.Context, actor scope.BusinessScope, c
 
 // ListWarehouses devuelve los almacenes visibles, opcionalmente filtrados
 // por empresa y sucursal (branchCode requiere companyCode).
-func (s *Service) ListWarehouses(ctx context.Context, actor scope.BusinessScope, companyCode, branchCode string) ([]org.Warehouse, error) {
+func (s *Service) ListWarehouses(ctx context.Context, p identity.Principal, companyCode, branchCode string) ([]org.Warehouse, error) {
 	var out []org.Warehouse
 	err := s.store.InTx(ctx, func(r Repository) error {
 		var companyID, branchID id.ID
 		switch {
 		case branchCode != "":
-			b, err := s.branch(ctx, r, actor, companyCode, branchCode)
+			b, err := s.branch(ctx, r, p, companyCode, branchCode)
 			if err != nil {
 				return err
 			}
 			companyID, branchID = b.CompanyID, b.ID
 		case companyCode != "":
-			c, err := s.company(ctx, r, actor, companyCode)
+			c, err := s.company(ctx, r, p, companyCode)
 			if err != nil {
 				return err
 			}
 			companyID = c.ID
 		default:
-			if _, err := s.organization(ctx, r, actor); err != nil {
+			if _, err := s.organization(ctx, r, p); err != nil {
 				return err
 			}
 		}
-		all, err := r.Warehouses(ctx, actor.Organization(), companyID, branchID)
+		all, err := r.Warehouses(ctx, p.OrganizationID, companyID, branchID)
 		if err != nil {
 			return err
 		}
-		out = filter(all, actor, org.Warehouse.Scope)
+		out = filter(all, p, org.Warehouse.Scope)
 		return nil
 	})
 	return out, err
 }
 
-func (s *Service) organization(ctx context.Context, r Repository, actor scope.BusinessScope) (org.Organization, error) {
-	if actor.Level() == 0 {
-		return org.Organization{}, fmt.Errorf("%w: ámbito vacío", ErrForbidden)
+// organization exige que el principal pueda ver la estructura en algún
+// ámbito de su organización.
+func (s *Service) organization(ctx context.Context, r Repository, p identity.Principal) (org.Organization, error) {
+	if !p.HasAnywhere(identity.PermOrgRead) {
+		return org.Organization{}, fmt.Errorf("%w: se requiere %s", identity.ErrDenied, identity.PermOrgRead)
 	}
-	return r.Organization(ctx, actor.Organization())
+	return r.Organization(ctx, p.OrganizationID)
 }
 
-// company busca por código dentro de la organización del actor; si el actor
-// no la ve, responde como si no existiera.
-func (s *Service) company(ctx context.Context, r Repository, actor scope.BusinessScope, code string) (org.Company, error) {
+// company busca por código dentro de la organización del principal; si no
+// la ve, responde como si no existiera.
+func (s *Service) company(ctx context.Context, r Repository, p identity.Principal, code string) (org.Company, error) {
 	c, err := org.ParseCode(code)
 	if err != nil {
 		return org.Company{}, err
 	}
-	if _, err := s.organization(ctx, r, actor); err != nil {
+	if _, err := s.organization(ctx, r, p); err != nil {
 		return org.Company{}, err
 	}
-	company, err := r.CompanyByCode(ctx, actor.Organization(), c)
+	company, err := r.CompanyByCode(ctx, p.OrganizationID, c)
 	if err != nil {
 		return org.Company{}, err
 	}
-	if !visible(actor, company.Scope()) {
+	if !visible(p, company.Scope()) {
 		return org.Company{}, fmt.Errorf("%w: empresa %s", ErrNotFound, c)
 	}
 	return company, nil
 }
 
-func (s *Service) branch(ctx context.Context, r Repository, actor scope.BusinessScope, companyCode, code string) (org.Branch, error) {
-	company, err := s.company(ctx, r, actor, companyCode)
+func (s *Service) branch(ctx context.Context, r Repository, p identity.Principal, companyCode, code string) (org.Branch, error) {
+	company, err := s.company(ctx, r, p, companyCode)
 	if err != nil {
 		return org.Branch{}, err
 	}
@@ -354,26 +382,26 @@ func (s *Service) branch(ctx context.Context, r Repository, actor scope.Business
 	if err != nil {
 		return org.Branch{}, err
 	}
-	b, err := r.BranchByCode(ctx, actor.Organization(), company.ID, c)
+	b, err := r.BranchByCode(ctx, p.OrganizationID, company.ID, c)
 	if err != nil {
 		return org.Branch{}, err
 	}
-	if !visible(actor, b.Scope()) {
+	if !visible(p, b.Scope()) {
 		return org.Branch{}, fmt.Errorf("%w: sucursal %s", ErrNotFound, c)
 	}
 	return b, nil
 }
 
-// visible: el actor ve una entidad si la contiene (es su ancestro) o si la
-// entidad contiene al actor (p. ej. un actor de sucursal ve su empresa).
-func visible(actor, entity scope.BusinessScope) bool {
-	return actor.Contains(entity) || entity.Contains(actor)
+// visible: el principal ve una entidad si tiene permiso de lectura en ella,
+// en un ancestro o en un descendiente (un usuario de sucursal ve su empresa).
+func visible(p identity.Principal, entity scope.BusinessScope) bool {
+	return p.Sees(identity.PermOrgRead, entity)
 }
 
-func filter[T any](items []T, actor scope.BusinessScope, scopeOf func(T) scope.BusinessScope) []T {
+func filter[T any](items []T, p identity.Principal, scopeOf func(T) scope.BusinessScope) []T {
 	out := make([]T, 0, len(items))
 	for _, it := range items {
-		if visible(actor, scopeOf(it)) {
+		if visible(p, scopeOf(it)) {
 			out = append(out, it)
 		}
 	}

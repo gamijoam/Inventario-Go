@@ -10,6 +10,8 @@ go build -o "$bin" ./cmd/balanzapro
 # Aislar del entorno del usuario: configuración y base en un directorio temporal.
 export BALANZAPRO_CONFIG="$work/config.toml"
 export BALANZAPRO_SQLITE_PATH="$work/datos/bp.db"
+export BALANZAPRO_SESSION_FILE="$work/estado/session"
+pw="cafe con leche"
 : > "$BALANZAPRO_CONFIG"
 
 "$bin" version --json
@@ -19,15 +21,27 @@ export BALANZAPRO_SQLITE_PATH="$work/datos/bp.db"
 "$bin" db migrate --json
 "$bin" db migrate --json   # idempotente
 "$bin" db status --json
-"$bin" setup --name "Panadería Ñandú" --rif J-12345678-9 --json
+printf '%s\n' "$pw" | "$bin" setup --name "Panadería Ñandú" --rif J-12345678-9 --password-stdin --json
+"$bin" auth whoami --json
 "$bin" company create --code norte --legal-name "Ñandú Norte, C.A." --json
 "$bin" branch create --company norte --code centro --name Centro --json
 "$bin" warehouse create --company norte --branch centro --code principal --name Principal --json
 "$bin" org list --json
 "$bin" warehouse list
+printf '%s\n' "sol y luna 2026" | "$bin" user create --username cajero --name "Cajero Uno" --password-stdin --json
+"$bin" user assign --username cajero --role CAJERO --company PRINCIPAL --branch PRINCIPAL --json
+"$bin" role list
 # Un segundo setup debe rechazarse con el código 6 (conflicto).
-set +e; "$bin" setup --name Otra >/dev/null 2>&1; code=$?; set -e
+set +e; printf '%s\n' "$pw" | "$bin" setup --name Otra --password-stdin >/dev/null 2>&1; code=$?; set -e
 test "$code" -eq 6
+# Sesión de cajero: lee la estructura, pero no crea almacenes (código 8).
+"$bin" auth logout
+set +e; "$bin" company list >/dev/null 2>&1; code=$?; set -e
+test "$code" -eq 9
+printf '%s\n' "sol y luna 2026" | "$bin" auth login --user cajero --password-stdin
+"$bin" company list
+set +e; "$bin" warehouse create --code x --name X >/dev/null 2>&1; code=$?; set -e
+test "$code" -eq 8
 "$bin" doctor
 
 # Sin terminal, el comando sin subcomando no abre la TUI: código 2.
@@ -38,8 +52,10 @@ if [ -n "${BALANZAPRO_SMOKE_POSTGRES_URL:-}" ]; then
   export BALANZAPRO_DB_DRIVER=postgres BALANZAPRO_POSTGRES_URL="$BALANZAPRO_SMOKE_POSTGRES_URL"
   "$bin" db migrate --json
   # La base de humo puede venir de una ejecución anterior ya configurada.
-  set +e; "$bin" setup --name "Bodega PG" >/dev/null 2>&1; code=$?; set -e
+  export BALANZAPRO_SESSION_FILE="$work/estado/session-pg"
+  set +e; printf '%s\n' "$pw" | "$bin" setup --name "Bodega PG" --password-stdin >/dev/null 2>&1; code=$?; set -e
   test "$code" -eq 0 -o "$code" -eq 6
+  printf '%s\n' "$pw" | "$bin" auth login --user admin --password-stdin
   "$bin" branch list --json
   "$bin" doctor
 fi

@@ -40,6 +40,12 @@ const (
 type Config struct {
 	Database Database `toml:"database"`
 	Log      Log      `toml:"log"`
+	Session  Session  `toml:"session"`
+}
+
+// Session indica dónde guarda la CLI el token de la sesión iniciada.
+type Session struct {
+	File string `toml:"file"`
 }
 
 type Database struct {
@@ -89,22 +95,26 @@ type Loaded struct {
 
 // Paths son las ubicaciones por defecto según el sistema operativo.
 type Paths struct {
-	ConfigFile string
-	SQLiteFile string
+	ConfigFile  string
+	SQLiteFile  string
+	SessionFile string
 }
 
 // DefaultPaths sigue las convenciones de cada plataforma: XDG en Linux y
 // %APPDATA% / %LOCALAPPDATA% en Windows.
 func DefaultPaths(o LoadOptions) Paths {
 	if o.GOOS == "windows" {
+		local := firstNonEmpty(o.Getenv("LOCALAPPDATA"), filepath.Join(o.HomeDir, "AppData", "Local"))
 		return Paths{
-			ConfigFile: filepath.Join(firstNonEmpty(o.Getenv("APPDATA"), filepath.Join(o.HomeDir, "AppData", "Roaming")), "BalanzaPro", "config.toml"),
-			SQLiteFile: filepath.Join(firstNonEmpty(o.Getenv("LOCALAPPDATA"), filepath.Join(o.HomeDir, "AppData", "Local")), "BalanzaPro", "balanzapro.db"),
+			ConfigFile:  filepath.Join(firstNonEmpty(o.Getenv("APPDATA"), filepath.Join(o.HomeDir, "AppData", "Roaming")), "BalanzaPro", "config.toml"),
+			SQLiteFile:  filepath.Join(local, "BalanzaPro", "balanzapro.db"),
+			SessionFile: filepath.Join(local, "BalanzaPro", "session"),
 		}
 	}
 	return Paths{
-		ConfigFile: filepath.Join(firstNonEmpty(o.Getenv("XDG_CONFIG_HOME"), filepath.Join(o.HomeDir, ".config")), "balanzapro", "config.toml"),
-		SQLiteFile: filepath.Join(firstNonEmpty(o.Getenv("XDG_DATA_HOME"), filepath.Join(o.HomeDir, ".local", "share")), "balanzapro", "balanzapro.db"),
+		ConfigFile:  filepath.Join(firstNonEmpty(o.Getenv("XDG_CONFIG_HOME"), filepath.Join(o.HomeDir, ".config")), "balanzapro", "config.toml"),
+		SQLiteFile:  filepath.Join(firstNonEmpty(o.Getenv("XDG_DATA_HOME"), filepath.Join(o.HomeDir, ".local", "share")), "balanzapro", "balanzapro.db"),
+		SessionFile: filepath.Join(firstNonEmpty(o.Getenv("XDG_STATE_HOME"), filepath.Join(o.HomeDir, ".local", "state")), "balanzapro", "session"),
 	}
 }
 
@@ -123,6 +133,7 @@ var fields = []field{
 	{"log.level", "BALANZAPRO_LOG_LEVEL", func(c *Config) string { return c.Log.Level }, func(c *Config, v string) { c.Log.Level = v }},
 	{"log.format", "BALANZAPRO_LOG_FORMAT", func(c *Config) string { return c.Log.Format }, func(c *Config, v string) { c.Log.Format = v }},
 	{"log.file", "BALANZAPRO_LOG_FILE", func(c *Config) string { return c.Log.File }, func(c *Config, v string) { c.Log.File = v }},
+	{"session.file", "BALANZAPRO_SESSION_FILE", func(c *Config) string { return c.Session.File }, func(c *Config, v string) { c.Session.File = v }},
 }
 
 // Keys devuelve las claves de configuración en orden estable.
@@ -151,6 +162,7 @@ func Load(o LoadOptions) (Loaded, error) {
 		Config: Config{
 			Database: Database{Driver: DriverSQLite, SQLite: SQLite{Path: paths.SQLiteFile}},
 			Log:      Log{Level: "warn", Format: "text"},
+			Session:  Session{File: paths.SessionFile},
 		},
 		Sources: map[string]Source{},
 	}
@@ -242,6 +254,9 @@ func validate(c Config) error {
 	}
 	if !slices.Contains([]string{"text", "json"}, c.Log.Format) {
 		problems = append(problems, fmt.Sprintf("log.format debe ser text o json, es %q", c.Log.Format))
+	}
+	if c.Session.File == "" {
+		problems = append(problems, "session.file no puede estar vacío")
 	}
 	if len(problems) > 0 {
 		return fmt.Errorf("%w: %s", ErrInvalid, strings.Join(problems, "; "))

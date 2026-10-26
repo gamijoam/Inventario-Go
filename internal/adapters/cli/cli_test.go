@@ -25,6 +25,11 @@ type runOpts struct {
 	interactive bool
 	env         map[string]string
 	home        string
+	// stdin es la entrada estándar (p. ej. para --password-stdin).
+	stdin string
+	// passwords son las respuestas, en orden, a los avisos de contraseña
+	// en terminal.
+	passwords []string
 }
 
 func run(t *testing.T, o runOpts, args ...string) result {
@@ -38,7 +43,15 @@ func run(t *testing.T, o runOpts, args ...string) result {
 		ConfigOptions: func(explicit string) config.LoadOptions {
 			return config.LoadOptions{ExplicitPath: explicit, Getenv: func(k string) string { return o.env[k] }, GOOS: "linux", HomeDir: o.home}
 		},
-		In:          strings.NewReader(""),
+		In: strings.NewReader(o.stdin),
+		ReadPassword: func(string) (string, error) {
+			if len(o.passwords) == 0 {
+				t.Fatal("aviso de contraseña inesperado")
+			}
+			pw := o.passwords[0]
+			o.passwords = o.passwords[1:]
+			return pw, nil
+		},
 		Out:         &out,
 		Err:         &errOut,
 		Getenv:      func(k string) string { return o.env[k] },
