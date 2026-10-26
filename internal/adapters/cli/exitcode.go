@@ -15,6 +15,11 @@ const (
 	ExitConfig = 4
 	// ExitUnavailable: no se pudo conectar con la base de datos.
 	ExitUnavailable = 5
+	// ExitConflict: el recurso ya existe (código, RIF o setup repetido).
+	ExitConflict = 6
+	// ExitNotFound: el recurso no existe o no es visible en el ámbito, o la
+	// instalación no tiene organización configurada.
+	ExitNotFound = 7
 )
 
 // exitError asocia un error con su código de salida. Si silent es true, el

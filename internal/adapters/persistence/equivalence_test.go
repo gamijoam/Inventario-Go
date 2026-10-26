@@ -74,38 +74,56 @@ func sqliteSchema(ctx context.Context, db *sql.DB) (schema, error) {
 			tb.PrimaryKey = append(tb.PrimaryKey, pk[i])
 		}
 
-		rows, err = db.QueryContext(ctx, "SELECT \"from\", \"table\", \"to\", on_delete FROM pragma_foreign_key_list(?)", name)
+		// Una fila por columna: se agrupan por id de FK, en orden de seq.
+		rows, err = db.QueryContext(ctx, "SELECT id, \"from\", \"table\", \"to\", on_delete FROM pragma_foreign_key_list(?) ORDER BY id, seq", name)
 		if err != nil {
 			return s, err
 		}
+		type fk struct {
+			from, to      []string
+			ref, onDelete string
+		}
+		fks := map[int]*fk{}
+		var order []int
 		for rows.Next() {
+			var fkID int
 			var from, ref, to, onDelete string
-			if err := rows.Scan(&from, &ref, &to, &onDelete); err != nil {
+			if err := rows.Scan(&fkID, &from, &ref, &to, &onDelete); err != nil {
 				rows.Close()
 				return s, err
 			}
-			tb.ForeignKeys = append(tb.ForeignKeys, fmt.Sprintf("%s -> %s(%s) ON DELETE %s", from, ref, to, onDelete))
+			f := fks[fkID]
+			if f == nil {
+				f = &fk{ref: ref, onDelete: onDelete}
+				fks[fkID] = f
+				order = append(order, fkID)
+			}
+			f.from, f.to = append(f.from, from), append(f.to, to)
 		}
 		rows.Close()
+		for _, k := range order {
+			f := fks[k]
+			tb.ForeignKeys = append(tb.ForeignKeys, foreignKey(f.from, f.ref, f.to, f.onDelete))
+		}
 
 		// origin 'c' = CREATE INDEX explícito; 'u' = UNIQUE de columna.
-		rows, err = db.QueryContext(ctx, "SELECT name, \"unique\", origin FROM pragma_index_list(?) WHERE origin IN ('c', 'u')", name)
+		rows, err = db.QueryContext(ctx, "SELECT name, \"unique\", origin, partial FROM pragma_index_list(?) WHERE origin IN ('c', 'u')", name)
 		if err != nil {
 			return s, err
 		}
 		type idx struct {
-			name, origin string
-			unique       bool
+			name, origin    string
+			unique, partial bool
 		}
 		var idxs []idx
 		for rows.Next() {
 			var i idx
-			var u int
-			if err := rows.Scan(&i.name, &u, &i.origin); err != nil {
+			var u, p int
+			if err := rows.Scan(&i.name, &u, &i.origin, &p); err != nil {
 				rows.Close()
 				return s, err
 			}
-			i.unique = u == 1
+			i.unique, i.partial = u == 1, p == 1
 			idxs = append(idxs, i)
 		}
 		rows.Close()
@@ -118,7 +136,7 @@ func sqliteSchema(ctx context.Context, db *sql.DB) (schema, error) {
 			if i.origin == "u" {
 				label = "unique:" + strings.Join(cols, ",")
 			}
-			tb.Indexes = append(tb.Indexes, index(label, cols, i.unique))
+			tb.Indexes = append(tb.Indexes, index(label, cols, i.unique, i.partial))
 		}
 		sortTable(&tb)
 		s.Tables[name] = tb
@@ -158,12 +176,14 @@ WHERE i.indrelid = $1::regclass AND i.indisprimary ORDER BY k.ord`, name)
 		}
 
 		rows, err = db.QueryContext(ctx, `
-SELECT a.attname, cf.relname, af.attname,
-       CASE c.confdeltype WHEN 'r' THEN 'RESTRICT' WHEN 'c' THEN 'CASCADE' WHEN 'n' THEN 'SET NULL' WHEN 'd' THEN 'SET DEFAULT' ELSE 'NO ACTION' END
-FROM pg_constraint c
-JOIN pg_class cf ON cf.oid = c.confrelid
-JOIN pg_attribute a ON a.attrelid = c.conrelid AND a.attnum = c.conkey[1]
-JOIN pg_attribute af ON af.attrelid = c.confrelid AND af.attnum = c.confkey[1]
+SELECT
+  array_to_string(ARRAY(SELECT a.attname FROM unnest(c.conkey) WITH ORDINALITY AS k(attnum, ord)
+                        JOIN pg_attribute a ON a.attrelid = c.conrelid AND a.attnum = k.attnum ORDER BY k.ord), ','),
+  cf.relname,
+  array_to_string(ARRAY(SELECT a.attname FROM unnest(c.confkey) WITH ORDINALITY AS k(attnum, ord)
+                        JOIN pg_attribute a ON a.attrelid = c.confrelid AND a.attnum = k.attnum ORDER BY k.ord), ','),
+  CASE c.confdeltype WHEN 'r' THEN 'RESTRICT' WHEN 'c' THEN 'CASCADE' WHEN 'n' THEN 'SET NULL' WHEN 'd' THEN 'SET DEFAULT' ELSE 'NO ACTION' END
+FROM pg_constraint c JOIN pg_class cf ON cf.oid = c.confrelid
 WHERE c.contype = 'f' AND c.conrelid = $1::regclass`, name)
 		if err != nil {
 			return s, err
@@ -174,12 +194,12 @@ WHERE c.contype = 'f' AND c.conrelid = $1::regclass`, name)
 				rows.Close()
 				return s, err
 			}
-			tb.ForeignKeys = append(tb.ForeignKeys, fmt.Sprintf("%s -> %s(%s) ON DELETE %s", from, ref, to, onDelete))
+			tb.ForeignKeys = append(tb.ForeignKeys, foreignKey(strings.Split(from, ","), ref, strings.Split(to, ","), onDelete))
 		}
 		rows.Close()
 
 		rows, err = db.QueryContext(ctx, `
-SELECT ic.relname, i.indisunique, EXISTS (SELECT 1 FROM pg_constraint c WHERE c.conindid = i.indexrelid AND c.contype = 'u'),
+SELECT ic.relname, i.indisunique, i.indpred IS NOT NULL, EXISTS (SELECT 1 FROM pg_constraint c WHERE c.conindid = i.indexrelid AND c.contype = 'u'),
        array_to_string(ARRAY(SELECT a.attname FROM unnest(i.indkey) WITH ORDINALITY AS k(attnum, ord)
                              JOIN pg_attribute a ON a.attrelid = i.indrelid AND a.attnum = k.attnum ORDER BY k.ord), ',')
 FROM pg_index i JOIN pg_class ic ON ic.oid = i.indexrelid
@@ -189,8 +209,8 @@ WHERE i.indrelid = $1::regclass AND NOT i.indisprimary`, name)
 		}
 		for rows.Next() {
 			var idxName, cols string
-			var unique, isConstraint bool
-			if err := rows.Scan(&idxName, &unique, &isConstraint, &cols); err != nil {
+			var unique, partial, isConstraint bool
+			if err := rows.Scan(&idxName, &unique, &partial, &isConstraint, &cols); err != nil {
 				rows.Close()
 				return s, err
 			}
@@ -198,7 +218,7 @@ WHERE i.indrelid = $1::regclass AND NOT i.indisprimary`, name)
 			if isConstraint {
 				label = "unique:" + cols
 			}
-			tb.Indexes = append(tb.Indexes, index(label, strings.Split(cols, ","), unique))
+			tb.Indexes = append(tb.Indexes, index(label, strings.Split(cols, ","), unique, partial))
 		}
 		rows.Close()
 		sortTable(&tb)
@@ -214,12 +234,19 @@ func column(name string, notNull bool) string {
 	return name + " NULL"
 }
 
-func index(label string, cols []string, unique bool) string {
+func index(label string, cols []string, unique, partial bool) string {
 	kind := "nonunique"
 	if unique {
 		kind = "unique"
 	}
+	if partial {
+		kind += " partial"
+	}
 	return fmt.Sprintf("%s(%s) %s", label, strings.Join(cols, ","), kind)
+}
+
+func foreignKey(from []string, ref string, to []string, onDelete string) string {
+	return fmt.Sprintf("(%s) -> %s(%s) ON DELETE %s", strings.Join(from, ","), ref, strings.Join(to, ","), onDelete)
 }
 
 func sortTable(tb *table) {
