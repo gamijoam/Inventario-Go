@@ -37,6 +37,9 @@ type Env struct {
 	// ConfigOptions describe dónde y cómo cargar la configuración;
 	// explicitPath proviene de --config.
 	ConfigOptions func(explicitPath string) config.LoadOptions
+	// ReadPassword pide un secreto en la terminal sin eco. Puede ser nil si
+	// no hay terminal; entonces solo se admite --password-stdin.
+	ReadPassword func(prompt string) (string, error)
 }
 
 type globalFlags struct {
@@ -127,7 +130,8 @@ func newRootCmd(env Env, flags *globalFlags) *cobra.Command {
 	root.SetFlagErrorFunc(func(_ *cobra.Command, err error) error { return usageErrorf("%s", err) })
 
 	root.AddCommand(newVersionCmd(flags), newDoctorCmd(env, flags), newConfigCmd(env, flags), newDBCmd(env, flags),
-		newSetupCmd(env, flags), newOrgCmd(env, flags), newCompanyCmd(env, flags), newBranchCmd(env, flags), newWarehouseCmd(env, flags))
+		newSetupCmd(env, flags), newAuthCmd(env, flags), newUserCmd(env, flags), newRoleCmd(env, flags),
+		newOrgCmd(env, flags), newCompanyCmd(env, flags), newBranchCmd(env, flags), newWarehouseCmd(env, flags))
 	return root
 }
 

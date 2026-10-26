@@ -9,7 +9,9 @@ import (
 	"github.com/gamijoam/inventario-go/internal/adapters/persistence"
 	apporg "github.com/gamijoam/inventario-go/internal/application/org"
 	"github.com/gamijoam/inventario-go/internal/domain/id"
+	"github.com/gamijoam/inventario-go/internal/domain/identity"
 	"github.com/gamijoam/inventario-go/internal/domain/org"
+	"github.com/gamijoam/inventario-go/internal/domain/scope"
 	"github.com/gamijoam/inventario-go/internal/platform/config"
 )
 
@@ -36,6 +38,12 @@ func installed(t *testing.T, cfg config.Database) (*persistence.Store, *apporg.S
 		t.Fatal(err)
 	}
 	return s, apporg.NewService(s.OrgStore(), func() time.Time { return time.Now().UTC() })
+}
+
+// admin es un principal con los permisos de ADMIN_ORG en sc.
+func admin(sc scope.BusinessScope) identity.Principal {
+	return identity.Principal{UserID: id.MustNew(), OrganizationID: sc.Organization(),
+		Grants: []identity.Grant{{Scope: sc, Permissions: identity.Templates()[0].Permissions}}}
 }
 
 func count(t *testing.T, s *persistence.Store, table string) int {
@@ -98,7 +106,7 @@ func TestCodesAndRIFAreUniqueWithinScope(t *testing.T) {
 		if err != nil {
 			t.Fatal(err)
 		}
-		actor := res.Organization.Scope()
+		actor := admin(res.Organization.Scope())
 
 		if _, err := svc.CreateCompany(ctx(t), actor, "PRINCIPAL", "Duplicada", ""); !errors.Is(err, apporg.ErrConflict) {
 			t.Errorf("código repetido: %v", err)
@@ -162,7 +170,7 @@ func TestOrganizationsAreIsolated(t *testing.T) {
 			t.Fatalf("los mismos códigos y RIF en otra organización deben aceptarse: %v", err)
 		}
 
-		actorA, actorB := a.Organization.Scope(), b.Scope()
+		actorA, actorB := admin(a.Organization.Scope()), admin(b.Scope())
 		listA, _ := svc.ListCompanies(ctx(t), actorA)
 		listB, _ := svc.ListCompanies(ctx(t), actorB)
 		if len(listA) != 1 || listA[0].ID != a.Company.ID || len(listB) != 1 || listB[0].ID != bc.ID {

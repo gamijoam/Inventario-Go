@@ -74,9 +74,13 @@ func TestDefaultPathsFollowPlatformConventions(t *testing.T) {
 	f := newFixture(t)
 	f.env["XDG_CONFIG_HOME"] = "/xdg/config"
 	f.env["XDG_DATA_HOME"] = "/xdg/data"
+	f.env["XDG_STATE_HOME"] = "/xdg/state"
 	l, err := config.Load(f.opts(""))
 	if err != nil {
 		t.Fatal(err)
+	}
+	if l.Config.Session.File != filepath.Join("/xdg/state", "balanzapro", "session") {
+		t.Errorf("sesión: %q", l.Config.Session.File)
 	}
 	if l.Path != filepath.Join("/xdg/config", "balanzapro", "config.toml") ||
 		l.Config.Database.SQLite.Path != filepath.Join("/xdg/data", "balanzapro", "balanzapro.db") {
@@ -90,7 +94,8 @@ func TestDefaultPathsFollowPlatformConventions(t *testing.T) {
 	opts.GOOS = "windows"
 	paths := config.DefaultPaths(opts)
 	if paths.ConfigFile != filepath.Join(`C:\Users\ana\AppData\Roaming`, "BalanzaPro", "config.toml") ||
-		paths.SQLiteFile != filepath.Join(`C:\Users\ana\AppData\Local`, "BalanzaPro", "balanzapro.db") {
+		paths.SQLiteFile != filepath.Join(`C:\Users\ana\AppData\Local`, "BalanzaPro", "balanzapro.db") ||
+		paths.SessionFile != filepath.Join(`C:\Users\ana\AppData\Local`, "BalanzaPro", "session") {
 		t.Errorf("rutas Windows: %+v", paths)
 	}
 }
@@ -165,6 +170,7 @@ func TestEveryEnvironmentVariable(t *testing.T) {
 		"BALANZAPRO_LOG_LEVEL":    "error",
 		"BALANZAPRO_LOG_FORMAT":   "json",
 		"BALANZAPRO_LOG_FILE":     "/var/log/bp.log",
+		"BALANZAPRO_SESSION_FILE": "/run/bp/session",
 	}
 	l, err := config.Load(f.opts(""))
 	if err != nil {
@@ -173,7 +179,7 @@ func TestEveryEnvironmentVariable(t *testing.T) {
 	c := l.Config
 	if c.Database.Driver != "postgres" || c.Database.SQLite.Path != "/datos/bp.db" ||
 		c.Database.Postgres.URL.Reveal() != "postgresql://bp@db.local/bp" ||
-		c.Log.Level != "error" || c.Log.Format != "json" || c.Log.File != "/var/log/bp.log" {
+		c.Log.Level != "error" || c.Log.Format != "json" || c.Log.File != "/var/log/bp.log" || c.Session.File != "/run/bp/session" {
 		t.Fatalf("variables no aplicadas: %+v", c)
 	}
 	for key, src := range l.Sources {

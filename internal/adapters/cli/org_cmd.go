@@ -2,9 +2,7 @@ package cli
 
 import (
 	"context"
-	"errors"
 	"fmt"
-	"io"
 	"strings"
 	"text/tabwriter"
 	"time"
@@ -13,6 +11,7 @@ import (
 	"github.com/spf13/cobra"
 
 	"github.com/gamijoam/inventario-go/internal/adapters/persistence"
+	"github.com/gamijoam/inventario-go/internal/application/auth"
 	apporg "github.com/gamijoam/inventario-go/internal/application/org"
 	"github.com/gamijoam/inventario-go/internal/domain/org"
 	"github.com/gamijoam/inventario-go/internal/domain/timezone"
@@ -76,43 +75,6 @@ func toWarehouseJSON(w org.Warehouse) warehouseJSON {
 
 func rfc3339(t time.Time) string { return t.UTC().Format(time.RFC3339) }
 
-// orgSession abre la base existente y resuelve el contexto de la
-// instalación. Hasta BP-M1-002 la CLI local actúa con el ámbito de la
-// organización asociada a la instalación, nunca con IDs que reciba.
-type orgSession struct {
-	svc   *apporg.Service
-	cur   apporg.Context
-	close func()
-}
-
-func openOrgSession(ctx context.Context, env Env, flags *globalFlags, errOut io.Writer) (orgSession, error) {
-	rt, err := loadRuntime(env, flags, errOut)
-	if err != nil {
-		return orgSession{}, err
-	}
-	store, err := persistence.Open(ctx, rt.loaded.Config.Database, false)
-	if errors.Is(err, persistence.ErrNotInitialized) {
-		rt.close()
-		return orgSession{}, orgError(apporg.ErrNotBootstrapped)
-	}
-	if err != nil {
-		rt.close()
-		return orgSession{}, unavailableError(err)
-	}
-	closeAll := func() { _ = store.Close(); _ = rt.close() }
-	if err := requireSchema(ctx, store); err != nil {
-		closeAll()
-		return orgSession{}, err
-	}
-	svc := apporg.NewService(store.OrgStore(), func() time.Time { return time.Now().UTC() })
-	cur, err := svc.Current(ctx)
-	if err != nil {
-		closeAll()
-		return orgSession{}, orgError(err)
-	}
-	return orgSession{svc: svc, cur: cur, close: closeAll}, nil
-}
-
 // requireSchema evita operar sobre una base con migraciones pendientes.
 func requireSchema(ctx context.Context, store *persistence.Store) error {
 	runner, err := store.Runner()
@@ -132,47 +94,33 @@ func requireSchema(ctx context.Context, store *persistence.Store) error {
 	return nil
 }
 
-// orgError traduce errores de la capa de aplicación a códigos de salida.
-func orgError(err error) error {
-	switch {
-	case err == nil:
-		return nil
-	case errors.Is(err, apporg.ErrConflict), errors.Is(err, apporg.ErrAlreadyBootstrapped):
-		return &exitError{code: ExitConflict, kind: "conflict", msg: err.Error()}
-	case errors.Is(err, apporg.ErrNotFound), errors.Is(err, apporg.ErrNotBootstrapped):
-		return &exitError{code: ExitNotFound, kind: "not_found", msg: err.Error()}
-	case errors.Is(err, org.ErrInvalid):
-		return usageErrorf("%s", err)
-	default:
-		return err
-	}
-}
-
 func newSetupCmd(env Env, flags *globalFlags) *cobra.Command {
 	var in apporg.BootstrapInput
+	var admin auth.AdminInput
+	var passwordStdin bool
 	cmd := &cobra.Command{
 		Use:   "setup",
-		Short: "Configura una instalación nueva: organización, empresa, sucursal y almacén",
+		Short: "Configura una instalación nueva: organización, empresa, sucursal, almacén y administrador",
 		Long: "Crea la base si hace falta, aplica las migraciones y registra en una sola\n" +
 			"transacción la organización, su empresa legal, la sucursal y el almacén\n" +
-			"principal, asociados a esta instalación. Solo se puede ejecutar una vez.\n\n" +
+			"principal, las plantillas de rol y el usuario administrador, que queda con\n" +
+			"la sesión iniciada. Solo se puede ejecutar una vez.\n\n" +
+			"La contraseña del administrador se pide en la terminal sin mostrarla, o se\n" +
+			"lee de la entrada estándar con --password-stdin. Nunca como argumento.\n\n" +
 			"Ejemplo:\n  balanzapro setup --name \"Bodega Ana\" --legal-name \"Bodega Ana, C.A.\" --rif J-12345678-9",
 		Args: noArgs,
 		RunE: func(cmd *cobra.Command, _ []string) error {
-			if strings.TrimSpace(in.OrganizationName) == "" {
-				return usageErrorf("--name es obligatorio")
-			}
-			if in.OrganizationCode == "" {
+			if in.OrganizationCode == "" && strings.TrimSpace(in.OrganizationName) != "" {
 				in.OrganizationCode = codeFromName(in.OrganizationName)
 			}
 			if in.CompanyLegalName == "" {
 				in.CompanyLegalName = in.OrganizationName
 			}
-			return runSetup(cmd, env, flags, in)
+			return runSetup(cmd, env, flags, in, admin, passwordStdin)
 		},
 	}
 	f := cmd.Flags()
-	f.StringVar(&in.OrganizationName, "name", "", "nombre del negocio (obligatorio)")
+	f.StringVar(&in.OrganizationName, "name", "", "nombre del negocio (obligatorio en una instalación nueva)")
 	f.StringVar(&in.OrganizationCode, "code", "", "código de la organización (por defecto, derivado del nombre)")
 	f.StringVar(&in.CompanyLegalName, "legal-name", "", "razón social de la empresa (por defecto, el nombre)")
 	f.StringVar(&in.RIF, "rif", "", "RIF de la empresa, p. ej. J-12345678-9 (opcional)")
@@ -181,15 +129,21 @@ func newSetupCmd(env Env, flags *globalFlags) *cobra.Command {
 	f.StringVar(&in.BranchCode, "branch-code", "PRINCIPAL", "código de la sucursal")
 	f.StringVar(&in.WarehouseName, "warehouse-name", "Principal", "nombre del almacén")
 	f.StringVar(&in.WarehouseCode, "warehouse-code", "PRINCIPAL", "código del almacén")
+	f.StringVar(&admin.Username, "admin-user", "admin", "usuario del administrador")
+	f.StringVar(&admin.DisplayName, "admin-name", "Administrador", "nombre visible del administrador")
+	f.BoolVar(&passwordStdin, "password-stdin", false, "lee la contraseña del administrador de la entrada estándar")
 	return cmd
 }
 
-func runSetup(cmd *cobra.Command, env Env, flags *globalFlags, in apporg.BootstrapInput) error {
+func runSetup(cmd *cobra.Command, env Env, flags *globalFlags, in apporg.BootstrapInput, admin auth.AdminInput, passwordStdin bool) error {
 	rt, err := loadRuntime(env, flags, cmd.ErrOrStderr())
 	if err != nil {
 		return err
 	}
 	defer rt.close()
+	if admin.Password, err = newSecrets(env, passwordStdin).read("Contraseña del administrador", true); err != nil {
+		return err
+	}
 	ctx, cancel := context.WithTimeout(cmd.Context(), dbTimeout)
 	defer cancel()
 
@@ -208,30 +162,52 @@ func runSetup(cmd *cobra.Command, env Env, flags *globalFlags, in apporg.Bootstr
 	if _, _, err := store.EnsureInstallation(ctx); err != nil {
 		return err
 	}
-	svc := apporg.NewService(store.OrgStore(), func() time.Time { return time.Now().UTC() })
-	res, err := svc.Bootstrap(ctx, in)
+	_, authSvc := newServices(store)
+	res, err := authSvc.Setup(ctx, in, admin)
 	if err != nil {
-		return orgError(err)
+		return appError(err)
 	}
-	rt.logger.Info("instalación configurada", "organization", res.Organization.Code.String(), "branch", res.Branch.Code.String())
+	rt.logger.Info("instalación configurada", "organization", res.Organization.Code.String(), "branch", res.Branch.Code.String(),
+		"admin", res.Admin.Username.String(), "completed_existing", res.Completed)
+	login, err := authSvc.Login(ctx, res.Admin.Username.String(), admin.Password)
+	if err != nil {
+		return appError(err)
+	}
+	if err := writeSessionFile(rt.loaded.Config.Session.File, login.Token); err != nil {
+		return fmt.Errorf("guardar la sesión: %w", err)
+	}
 
 	if flags.json {
+		var wh *warehouseJSON
+		if !res.Completed {
+			w := toWarehouseJSON(res.Warehouse)
+			wh = &w
+		}
 		return writeJSON(cmd.OutOrStdout(), struct {
-			Schema       string        `json:"schema"`
-			Organization orgJSON       `json:"organization"`
-			Company      companyJSON   `json:"company"`
-			Branch       branchJSON    `json:"branch"`
-			Warehouse    warehouseJSON `json:"warehouse"`
-		}{"balanzapro.setup/v1", toOrgJSON(res.Organization), toCompanyJSON(res.Company),
-			toBranchJSON(res.Branch, res.Company.Code.String()), toWarehouseJSON(res.Warehouse)})
+			Schema       string         `json:"schema"`
+			Organization orgJSON        `json:"organization"`
+			Company      companyJSON    `json:"company"`
+			Branch       branchJSON     `json:"branch"`
+			Warehouse    *warehouseJSON `json:"warehouse"`
+			Admin        userJSON       `json:"admin"`
+			Completed    bool           `json:"completed_existing"`
+		}{"balanzapro.setup/v2", toOrgJSON(res.Organization), toCompanyJSON(res.Company),
+			toBranchJSON(res.Branch, res.Company.Code.String()), wh, toUserJSON(auth.UserView{User: res.Admin}), res.Completed})
 	}
 	out := cmd.OutOrStdout()
-	fmt.Fprintln(out, "instalación configurada:")
+	if res.Completed {
+		fmt.Fprintln(out, "la instalación ya tenía organización; se agregaron los roles y el administrador:")
+	} else {
+		fmt.Fprintln(out, "instalación configurada:")
+	}
 	tw := tabwriter.NewWriter(out, 0, 0, 2, ' ', 0)
 	fmt.Fprintf(tw, "  organización\t%s\t%s\n", res.Organization.Code, res.Organization.Name)
 	fmt.Fprintf(tw, "  empresa\t%s\t%s%s\n", res.Company.Code, res.Company.LegalName, rifSuffix(res.Company.RIF))
 	fmt.Fprintf(tw, "  sucursal\t%s\t%s\n", res.Branch.Code, res.Branch.Name)
-	fmt.Fprintf(tw, "  almacén\t%s\t%s\n", res.Warehouse.Code, res.Warehouse.Name)
+	if !res.Completed {
+		fmt.Fprintf(tw, "  almacén\t%s\t%s\n", res.Warehouse.Code, res.Warehouse.Name)
+	}
+	fmt.Fprintf(tw, "  administrador\t%s\t%s (sesión iniciada)\n", res.Admin.Username, res.Admin.DisplayName)
 	return tw.Flush()
 }
 
@@ -243,8 +219,11 @@ func newOrgCmd(env Env, flags *globalFlags) *cobra.Command {
 		Short: "Muestra la organización asociada y la sucursal activa",
 		Args:  noArgs,
 		RunE: func(cmd *cobra.Command, _ []string) error {
-			return withOrg(cmd, env, flags, func(ctx context.Context, s orgSession) error {
-				c := s.cur
+			return withSession(cmd, env, flags, func(ctx context.Context, s appSession) error {
+				c, err := s.org.Overview(ctx, s.principal())
+				if err != nil {
+					return appError(err)
+				}
 				if flags.json {
 					return writeJSON(cmd.OutOrStdout(), struct {
 						Schema string    `json:"schema"`
@@ -278,10 +257,10 @@ func newCompanyCmd(env Env, flags *globalFlags) *cobra.Command {
 		Short: "Lista las empresas",
 		Args:  noArgs,
 		RunE: func(cmd *cobra.Command, _ []string) error {
-			return withOrg(cmd, env, flags, func(ctx context.Context, s orgSession) error {
-				list, err := s.svc.ListCompanies(ctx, s.cur.Scope())
+			return withSession(cmd, env, flags, func(ctx context.Context, s appSession) error {
+				list, err := s.org.ListCompanies(ctx, s.principal())
 				if err != nil {
-					return orgError(err)
+					return appError(err)
 				}
 				if flags.json {
 					items := make([]companyJSON, 0, len(list))
@@ -305,10 +284,10 @@ func newCompanyCmd(env Env, flags *globalFlags) *cobra.Command {
 		Short: "Crea una empresa legal",
 		Args:  noArgs,
 		RunE: func(cmd *cobra.Command, _ []string) error {
-			return withOrg(cmd, env, flags, func(ctx context.Context, s orgSession) error {
-				c, err := s.svc.CreateCompany(ctx, s.cur.Scope(), code, legalName, rif)
+			return withSession(cmd, env, flags, func(ctx context.Context, s appSession) error {
+				c, err := s.org.CreateCompany(ctx, s.principal(), code, legalName, rif)
 				if err != nil {
-					return orgError(err)
+					return appError(err)
 				}
 				if flags.json {
 					return writeJSON(cmd.OutOrStdout(), struct {
@@ -338,10 +317,10 @@ func newBranchCmd(env Env, flags *globalFlags) *cobra.Command {
 		Short: "Lista las sucursales (de todas las empresas o de --company)",
 		Args:  noArgs,
 		RunE: func(cmd *cobra.Command, _ []string) error {
-			return withOrg(cmd, env, flags, func(ctx context.Context, s orgSession) error {
-				list, err := s.svc.ListBranches(ctx, s.cur.Scope(), listCompany)
+			return withSession(cmd, env, flags, func(ctx context.Context, s appSession) error {
+				list, err := s.org.ListBranches(ctx, s.principal(), listCompany)
 				if err != nil {
-					return orgError(err)
+					return appError(err)
 				}
 				codes, err := companyCodes(ctx, s)
 				if err != nil {
@@ -376,13 +355,13 @@ func newBranchCmd(env Env, flags *globalFlags) *cobra.Command {
 		Short: "Crea una sucursal en una empresa (por defecto, la de esta instalación)",
 		Args:  noArgs,
 		RunE: func(cmd *cobra.Command, _ []string) error {
-			return withOrg(cmd, env, flags, func(ctx context.Context, s orgSession) error {
+			return withSession(cmd, env, flags, func(ctx context.Context, s appSession) error {
 				if company == "" {
 					company = s.cur.Company.Code.String()
 				}
-				b, err := s.svc.CreateBranch(ctx, s.cur.Scope(), company, code, name)
+				b, err := s.org.CreateBranch(ctx, s.principal(), company, code, name)
 				if err != nil {
-					return orgError(err)
+					return appError(err)
 				}
 				if flags.json {
 					return writeJSON(cmd.OutOrStdout(), struct {
@@ -415,10 +394,10 @@ func newWarehouseCmd(env Env, flags *globalFlags) *cobra.Command {
 			if listBranch != "" && listCompany == "" {
 				return usageErrorf("--branch requiere --company")
 			}
-			return withOrg(cmd, env, flags, func(ctx context.Context, s orgSession) error {
-				list, err := s.svc.ListWarehouses(ctx, s.cur.Scope(), listCompany, listBranch)
+			return withSession(cmd, env, flags, func(ctx context.Context, s appSession) error {
+				list, err := s.org.ListWarehouses(ctx, s.principal(), listCompany, listBranch)
 				if err != nil {
-					return orgError(err)
+					return appError(err)
 				}
 				if flags.json {
 					items := make([]warehouseJSON, 0, len(list))
@@ -427,9 +406,9 @@ func newWarehouseCmd(env Env, flags *globalFlags) *cobra.Command {
 					}
 					return writeJSON(cmd.OutOrStdout(), listPayload("balanzapro.warehouses/v1", items))
 				}
-				branches, err := s.svc.ListBranches(ctx, s.cur.Scope(), "")
+				branches, err := s.org.ListBranches(ctx, s.principal(), "")
 				if err != nil {
-					return orgError(err)
+					return appError(err)
 				}
 				branchCode := map[string]string{}
 				for _, b := range branches {
@@ -457,13 +436,13 @@ func newWarehouseCmd(env Env, flags *globalFlags) *cobra.Command {
 			if (company == "") != (branch == "") {
 				return usageErrorf("indique --company y --branch juntos, o ninguno para usar la sucursal de esta instalación")
 			}
-			return withOrg(cmd, env, flags, func(ctx context.Context, s orgSession) error {
+			return withSession(cmd, env, flags, func(ctx context.Context, s appSession) error {
 				if company == "" {
 					company, branch = s.cur.Company.Code.String(), s.cur.Branch.Code.String()
 				}
-				w, err := s.svc.CreateWarehouse(ctx, s.cur.Scope(), company, branch, code, name)
+				w, err := s.org.CreateWarehouse(ctx, s.principal(), company, branch, code, name)
 				if err != nil {
-					return orgError(err)
+					return appError(err)
 				}
 				if flags.json {
 					return writeJSON(cmd.OutOrStdout(), struct {
@@ -485,21 +464,10 @@ func newWarehouseCmd(env Env, flags *globalFlags) *cobra.Command {
 	return cmd
 }
 
-func withOrg(cmd *cobra.Command, env Env, flags *globalFlags, fn func(context.Context, orgSession) error) error {
-	ctx, cancel := context.WithTimeout(cmd.Context(), dbTimeout)
-	defer cancel()
-	s, err := openOrgSession(ctx, env, flags, cmd.ErrOrStderr())
+func companyCodes(ctx context.Context, s appSession) (map[string]string, error) {
+	list, err := s.org.ListCompanies(ctx, s.principal())
 	if err != nil {
-		return err
-	}
-	defer s.close()
-	return fn(ctx, s)
-}
-
-func companyCodes(ctx context.Context, s orgSession) (map[string]string, error) {
-	list, err := s.svc.ListCompanies(ctx, s.cur.Scope())
-	if err != nil {
-		return nil, orgError(err)
+		return nil, appError(err)
 	}
 	out := make(map[string]string, len(list))
 	for _, c := range list {

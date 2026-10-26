@@ -37,6 +37,7 @@ balanzapro doctor              # incluye la verificación "config"
 | `log.level` | `BALANZAPRO_LOG_LEVEL` | `warn` | `debug`, `info`, `warn`, `error` |
 | `log.format` | `BALANZAPRO_LOG_FORMAT` | `text` | `text`, `json` |
 | `log.file` | `BALANZAPRO_LOG_FILE` | vacío (stderr) | ruta; se crea con permisos 0600 |
+| `session.file` | `BALANZAPRO_SESSION_FILE` | Linux: `~/.local/state/balanzapro/session` (o `$XDG_STATE_HOME`); Windows: `%LOCALAPPDATA%\BalanzaPro\session` | token de la sesión iniciada; se crea con permisos 0600 |
 
 Las claves desconocidas son un error, para detectar errores de escritura.
 

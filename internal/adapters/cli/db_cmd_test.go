@@ -24,8 +24,12 @@ func migrationCount(t *testing.T) int {
 
 func sqliteEnv(t *testing.T) (runOpts, string) {
 	t.Helper()
-	path := filepath.Join(t.TempDir(), "datos", "bp.db")
-	return runOpts{env: map[string]string{"BALANZAPRO_SQLITE_PATH": path}}, path
+	dir := t.TempDir()
+	path := filepath.Join(dir, "datos", "bp.db")
+	return runOpts{env: map[string]string{
+		"BALANZAPRO_SQLITE_PATH":  path,
+		"BALANZAPRO_SESSION_FILE": filepath.Join(dir, "estado", "session"),
+	}}, path
 }
 
 func TestDBStatusBeforeMigrateDoesNotCreateTheDatabase(t *testing.T) {

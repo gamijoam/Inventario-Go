@@ -2,6 +2,7 @@ package cli_test
 
 import (
 	"database/sql"
+	"path/filepath"
 	"strings"
 	"testing"
 
@@ -11,10 +12,21 @@ import (
 	_ "modernc.org/sqlite"
 )
 
+// adminPassword es la contraseña del administrador en las pruebas.
+const adminPassword = "cafe con leche"
+
+// withStdin devuelve o con la entrada estándar indicada.
+func withStdin(o runOpts, lines ...string) runOpts {
+	o.stdin = strings.Join(lines, "\n") + "\n"
+	return o
+}
+
+// setupSQLite configura una instalación SQLite; el administrador queda con
+// la sesión iniciada.
 func setupSQLite(t *testing.T) runOpts {
 	t.Helper()
 	o, _ := sqliteEnv(t)
-	r := run(t, o, "setup", "--name", "Panadería Ñandú", "--legal-name", "Panadería Ñandú, C.A.", "--rif", "j123456789")
+	r := run(t, withStdin(o, adminPassword), "setup", "--name", "Panadería Ñandú", "--legal-name", "Panadería Ñandú, C.A.", "--rif", "j123456789", "--password-stdin")
 	if r.code != cli.ExitOK {
 		t.Fatalf("setup: code=%d stderr=%s", r.code, r.stderr)
 	}
@@ -23,19 +35,19 @@ func setupSQLite(t *testing.T) runOpts {
 
 func TestSetupCreatesTheWholeStructure(t *testing.T) {
 	o, _ := sqliteEnv(t)
-	r := run(t, o, "setup", "--name", "Panadería Ñandú", "--rif", "j123456789", "--json")
+	r := run(t, withStdin(o, adminPassword), "setup", "--name", "Panadería Ñandú", "--rif", "j123456789", "--json", "--password-stdin")
 	if r.code != cli.ExitOK {
 		t.Fatalf("code=%d stderr=%s", r.code, r.stderr)
 	}
 	v := decode(t, r.stdout)
 	orgv := v["organization"].(map[string]any)
 	company := v["company"].(map[string]any)
-	if v["schema"] != "balanzapro.setup/v1" || orgv["code"] != "PANADERIA-NANDU" || company["rif"] != "J-12345678-9" ||
+	if v["schema"] != "balanzapro.setup/v2" || v["admin"].(map[string]any)["username"] != "admin" || orgv["code"] != "PANADERIA-NANDU" || company["rif"] != "J-12345678-9" ||
 		company["legal_name"] != "Panadería Ñandú" || v["warehouse"].(map[string]any)["code"] != "PRINCIPAL" {
 		t.Fatalf("payload = %v", v)
 	}
 
-	r = run(t, o, "setup", "--name", "Otra")
+	r = run(t, withStdin(o, adminPassword), "setup", "--name", "Otra", "--password-stdin")
 	if r.code != cli.ExitConflict || !strings.Contains(r.stderr, "ya tiene una organización") {
 		t.Fatalf("segundo setup: code=%d stderr=%s", r.code, r.stderr)
 	}
@@ -49,7 +61,7 @@ func TestSetupValidatesInput(t *testing.T) {
 		{"setup", "--name", "Ana", "--rif", "123"},
 		{"setup", "--name", "Ana", "--branch-code", "con espacio"},
 	} {
-		if r := run(t, o, args...); r.code != cli.ExitUsage {
+		if r := run(t, withStdin(o, adminPassword), append(args, "--password-stdin")...); r.code != cli.ExitUsage {
 			t.Errorf("%v: code=%d stderr=%s", args, r.code, r.stderr)
 		}
 	}
@@ -144,7 +156,7 @@ func TestRequiredFlagsAreUsageErrors(t *testing.T) {
 
 func TestOrgCommandsRefusePendingMigrations(t *testing.T) {
 	o, path := sqliteEnv(t)
-	if r := run(t, o, "setup", "--name", "Ana"); r.code != cli.ExitOK {
+	if r := run(t, withStdin(o, adminPassword), "setup", "--name", "Ana", "--password-stdin"); r.code != cli.ExitOK {
 		t.Fatalf("setup: %s", r.stderr)
 	}
 	// Simula un ejecutable más nuevo que la base: la última migración
@@ -168,8 +180,9 @@ func TestSetupOnPostgres(t *testing.T) {
 	o := runOpts{env: map[string]string{
 		"BALANZAPRO_DB_DRIVER":    "postgres",
 		"BALANZAPRO_POSTGRES_URL": pgtest.NewDatabase(t),
+		"BALANZAPRO_SESSION_FILE": filepath.Join(t.TempDir(), "session"),
 	}}
-	if r := run(t, o, "setup", "--name", "Bodega Ana", "--rif", "J-12345678-9"); r.code != cli.ExitOK {
+	if r := run(t, withStdin(o, adminPassword), "setup", "--name", "Bodega Ana", "--rif", "J-12345678-9", "--password-stdin"); r.code != cli.ExitOK {
 		t.Fatalf("setup: code=%d stderr=%s", r.code, r.stderr)
 	}
 	if r := run(t, o, "branch", "create", "--code", "centro", "--name", "Centro"); r.code != cli.ExitOK {

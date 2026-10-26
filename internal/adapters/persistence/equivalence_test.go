@@ -128,7 +128,8 @@ func sqliteSchema(ctx context.Context, db *sql.DB) (schema, error) {
 		}
 		rows.Close()
 		for _, i := range idxs {
-			cols, err := strings1(ctx, db, "SELECT name FROM pragma_index_info(?) ORDER BY seqno", i.name)
+			// Las columnas de expresión (p. ej. coalesce) no tienen nombre.
+			cols, err := strings1(ctx, db, "SELECT coalesce(name, '<expr>') FROM pragma_index_info(?) ORDER BY seqno", i.name)
 			if err != nil {
 				return s, err
 			}
@@ -200,8 +201,8 @@ WHERE c.contype = 'f' AND c.conrelid = $1::regclass`, name)
 
 		rows, err = db.QueryContext(ctx, `
 SELECT ic.relname, i.indisunique, i.indpred IS NOT NULL, EXISTS (SELECT 1 FROM pg_constraint c WHERE c.conindid = i.indexrelid AND c.contype = 'u'),
-       array_to_string(ARRAY(SELECT a.attname FROM unnest(i.indkey) WITH ORDINALITY AS k(attnum, ord)
-                             JOIN pg_attribute a ON a.attrelid = i.indrelid AND a.attnum = k.attnum ORDER BY k.ord), ',')
+       array_to_string(ARRAY(SELECT coalesce(a.attname, '<expr>') FROM unnest(i.indkey) WITH ORDINALITY AS k(attnum, ord)
+                             LEFT JOIN pg_attribute a ON a.attrelid = i.indrelid AND a.attnum = k.attnum ORDER BY k.ord), ',')
 FROM pg_index i JOIN pg_class ic ON ic.oid = i.indexrelid
 WHERE i.indrelid = $1::regclass AND NOT i.indisprimary`, name)
 		if err != nil {

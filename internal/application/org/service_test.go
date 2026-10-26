@@ -3,11 +3,13 @@ package org_test
 import (
 	"context"
 	"errors"
+	"strings"
 	"testing"
 	"time"
 
 	apporg "github.com/gamijoam/inventario-go/internal/application/org"
 	"github.com/gamijoam/inventario-go/internal/domain/id"
+	"github.com/gamijoam/inventario-go/internal/domain/identity"
 	"github.com/gamijoam/inventario-go/internal/domain/org"
 	"github.com/gamijoam/inventario-go/internal/domain/scope"
 )
@@ -185,6 +187,17 @@ func (t *memTx) Bind(_ context.Context, b apporg.Binding) error {
 	return nil
 }
 
+// as devuelve un principal con todos los permisos de administración en s:
+// así las pruebas aíslan el efecto del ámbito.
+func as(s scope.BusinessScope) identity.Principal {
+	return asWith(s, identity.Templates()[0].Permissions...)
+}
+
+func asWith(s scope.BusinessScope, perms ...identity.Permission) identity.Principal {
+	return identity.Principal{UserID: id.MustNew(), OrganizationID: s.Organization(),
+		Grants: []identity.Grant{{Scope: s, Permissions: perms}}}
+}
+
 var fixedNow = time.Date(2026, 10, 26, 15, 0, 0, 0, time.UTC)
 
 func defaultInput() apporg.BootstrapInput {
@@ -218,9 +231,6 @@ func TestBootstrapCreatesWholeHierarchyAndBinding(t *testing.T) {
 	cur, err := svc.Current(context.Background())
 	if err != nil || cur.Branch.ID != res.Branch.ID || cur.Organization.ID != res.Organization.ID {
 		t.Fatalf("Current = %+v, %v", cur, err)
-	}
-	if cur.Scope().Level() != scope.LevelOrganization {
-		t.Fatalf("el ámbito local de administración es la organización")
 	}
 }
 
@@ -268,7 +278,7 @@ func TestCurrentBeforeBootstrap(t *testing.T) {
 func TestCreateAndListWithinOrganization(t *testing.T) {
 	svc, _, res := bootstrapped(t)
 	ctx := context.Background()
-	actor := res.Organization.Scope()
+	actor := as(res.Organization.Scope())
 
 	c, err := svc.CreateCompany(ctx, actor, "norte", "Bodega Ana Norte, C.A.", "")
 	if err != nil {
@@ -300,7 +310,7 @@ func TestCreateAndListWithinOrganization(t *testing.T) {
 func TestDuplicateCodesConflictWithinParentOnly(t *testing.T) {
 	svc, _, res := bootstrapped(t)
 	ctx := context.Background()
-	actor := res.Organization.Scope()
+	actor := as(res.Organization.Scope())
 
 	if _, err := svc.CreateCompany(ctx, actor, "PRINCIPAL", "Otra", ""); !errors.Is(err, apporg.ErrConflict) {
 		t.Errorf("código de empresa repetido: %v", err)
@@ -330,14 +340,14 @@ func TestOtherOrganizationsAreInvisible(t *testing.T) {
 	st.state.orgs = append(st.state.orgs, other)
 	st.state.companies = append(st.state.companies, otherCo)
 
-	actor := res.Organization.Scope()
+	actor := as(res.Organization.Scope())
 	if _, err := svc.CreateBranch(ctx, actor, "secreta", "x", "X"); !errors.Is(err, apporg.ErrNotFound) {
 		t.Errorf("empresa de otra organización: se esperaba ErrNotFound, obtuvo %v", err)
 	}
 	if list, _ := svc.ListCompanies(ctx, actor); len(list) != 1 {
 		t.Errorf("solo debe ver su empresa, ve %d", len(list))
 	}
-	foreign := other.Scope()
+	foreign := as(other.Scope())
 	if list, _ := svc.ListCompanies(ctx, foreign); len(list) != 1 || list[0].ID != otherCo.ID {
 		t.Errorf("la otra organización tampoco ve la primera: %+v", list)
 	}
@@ -346,13 +356,13 @@ func TestOtherOrganizationsAreInvisible(t *testing.T) {
 func TestNarrowActorsCannotWidenTheirScope(t *testing.T) {
 	svc, _, res := bootstrapped(t)
 	ctx := context.Background()
-	orgActor := res.Organization.Scope()
+	orgActor := as(res.Organization.Scope())
 	if _, err := svc.CreateCompany(ctx, orgActor, "b", "Empresa B", ""); err != nil {
 		t.Fatal(err)
 	}
 
-	companyActor := res.Company.Scope()
-	if _, err := svc.CreateCompany(ctx, companyActor, "c", "Empresa C", ""); !errors.Is(err, apporg.ErrForbidden) {
+	companyActor := as(res.Company.Scope())
+	if _, err := svc.CreateCompany(ctx, companyActor, "c", "Empresa C", ""); !errors.Is(err, identity.ErrDenied) {
 		t.Errorf("actor de empresa creando empresa: %v", err)
 	}
 	if _, err := svc.CreateBranch(ctx, companyActor, "b", "x", "X"); !errors.Is(err, apporg.ErrNotFound) {
@@ -362,8 +372,8 @@ func TestNarrowActorsCannotWidenTheirScope(t *testing.T) {
 		t.Errorf("actor de empresa ve %d empresas", len(list))
 	}
 
-	branchActor := res.Branch.Scope()
-	if _, err := svc.CreateBranch(ctx, branchActor, "principal", "nueva", "Nueva"); !errors.Is(err, apporg.ErrForbidden) {
+	branchActor := as(res.Branch.Scope())
+	if _, err := svc.CreateBranch(ctx, branchActor, "principal", "nueva", "Nueva"); !errors.Is(err, identity.ErrDenied) {
 		t.Errorf("actor de sucursal creando sucursal: %v", err)
 	}
 	if _, err := svc.CreateWarehouse(ctx, branchActor, "principal", "principal", "alm-2", "Almacén 2"); err != nil {
@@ -373,18 +383,37 @@ func TestNarrowActorsCannotWidenTheirScope(t *testing.T) {
 		t.Errorf("actor de sucursal ve %d sucursales", len(list))
 	}
 
-	if _, err := svc.ListCompanies(ctx, scope.BusinessScope{}); !errors.Is(err, apporg.ErrForbidden) {
-		t.Errorf("ámbito vacío: %v", err)
+	if _, err := svc.ListCompanies(ctx, identity.Principal{UserID: id.MustNew(), OrganizationID: res.Organization.ID}); !errors.Is(err, identity.ErrDenied) {
+		t.Errorf("principal sin asignaciones: %v", err)
 	}
 }
 
 func TestErrorsWrapSentinels(t *testing.T) {
 	svc, _, res := bootstrapped(t)
-	_, err := svc.CreateBranch(context.Background(), res.Organization.Scope(), "no-existe", "x", "X")
+	_, err := svc.CreateBranch(context.Background(), as(res.Organization.Scope()), "no-existe", "x", "X")
 	if !errors.Is(err, apporg.ErrNotFound) {
 		t.Fatalf("err = %v", err)
 	}
-	if _, err := svc.CreateBranch(context.Background(), res.Organization.Scope(), "mal código", "x", "X"); !errors.Is(err, org.ErrInvalid) {
+	if _, err := svc.CreateBranch(context.Background(), as(res.Organization.Scope()), "mal código", "x", "X"); !errors.Is(err, org.ErrInvalid) {
 		t.Fatalf("err = %v", err)
+	}
+}
+
+func TestOperationDeniedWithinOwnScope(t *testing.T) {
+	svc, _, res := bootstrapped(t)
+	ctx := context.Background()
+	// Cajero de la sucursal: ve la estructura pero no crea almacenes.
+	cashier := asWith(res.Branch.Scope(), identity.PermOrgRead)
+	_, err := svc.CreateWarehouse(ctx, cashier, "principal", "principal", "alm-2", "Almacén 2")
+	if !errors.Is(err, identity.ErrDenied) || !strings.Contains(err.Error(), "org.warehouse.create") {
+		t.Fatalf("err = %v", err)
+	}
+	if list, err := svc.ListWarehouses(ctx, cashier, "", ""); err != nil || len(list) != 1 {
+		t.Fatalf("lectura permitida: %v %v", list, err)
+	}
+	// Sin permiso de lectura, ni siquiera ve la estructura.
+	creator := asWith(res.Branch.Scope(), identity.PermWarehouseCreate)
+	if _, err := svc.ListBranches(ctx, creator, ""); !errors.Is(err, identity.ErrDenied) {
+		t.Fatalf("listar sin lectura: %v", err)
 	}
 }

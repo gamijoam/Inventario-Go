@@ -9,8 +9,9 @@ defecto):
 balanzapro setup --name "Bodega Ana" --legal-name "Bodega Ana, C.A." --rif J-12345678-9
 ```
 
-`setup` crea la base, aplica las migraciones y registra en una sola
-operación:
+`setup` pide dos veces la contraseña del administrador (sin mostrarla; en
+scripts use `--password-stdin`). Crea la base, aplica las migraciones y
+registra en una sola operación:
 
 | Nivel | Código por defecto | Para qué sirve |
 |---|---|---|
@@ -18,6 +19,7 @@ operación:
 | Empresa legal | `PRINCIPAL` | Razón social y RIF que emiten documentos |
 | Sucursal | `PRINCIPAL` | Lugar donde se vende; esta instalación la atiende |
 | Almacén | `PRINCIPAL` | Donde está la mercancía de esa sucursal |
+| Usuario administrador | `admin` (`--admin-user`) | Administra toda la organización; queda con la sesión iniciada |
 
 Todo se puede renombrar con flags (`--code`, `--company-code`,
 `--branch-name`, `--warehouse-name`…; ver `balanzapro setup --help`).
@@ -55,5 +57,6 @@ Todos admiten `--json`. Las fechas se muestran en hora de Venezuela.
 - Desactivar o renombrar empresas, sucursales o almacenes.
 - Mover una sucursal a otra empresa legal (requerirá un procedimiento
   propio por sus implicaciones fiscales).
-- Usuarios y permisos: llegan en el próximo paso (BP-M1-002). Mientras
-  tanto, quien usa la CLI en este equipo administra su organización.
+
+Para crear usuarios y darles permisos, vea
+[Usuarios y permisos](usuarios-y-permisos.md).
