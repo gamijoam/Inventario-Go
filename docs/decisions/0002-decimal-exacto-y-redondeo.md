@@ -29,7 +29,14 @@ política de redondeo. La biblioteca decimal no debe filtrarse a los módulos.
 7. **Monedas iniciales:** USD y VES con escala de liquidación 2 (provisional).
 8. **Quantity:** unidad obligatoria con su propia escala (0–6); se rechaza una
    cantidad con más decimales que su unidad y la mezcla de unidades.
-9. **Zona horaria:** instantes en UTC; presentación en `America/Caracas` con
+9. **ExchangeRate:** `Quote` por 1 `Base` (USD/VES = 45.725 → 1 USD = 45.725
+   VES), tasa positiva, monedas distintas, fuente (`official`,
+   `manually_entered`, `provider`) e instante de vigencia en UTC. `Convert`
+   funciona en ambas direcciones y devuelve una instantánea `Conversion`
+   (origen, tasa, equivalente sin redondear, importe liquidado y modo).
+   Base → cotizada multiplica exacto; cotizada → base divide y liquida
+   directamente a la escala destino, sin doble redondeo.
+10. **Zona horaria:** instantes en UTC; presentación en `America/Caracas` con
    `time/tzdata` incrustado para no depender del sistema operativo.
 
 ## Consecuencias
@@ -37,7 +44,7 @@ política de redondeo. La biblioteca decimal no debe filtrarse a los módulos.
 - `0.10 + 0.20 = 0.30` exacto; las pruebas lo protegen.
 - Siguen **pendientes de ratificar**: escalas por campo, modo de redondeo
   fiscal, moneda de valoración por empresa y la política de tasas.
-  `ExchangeRate` y `BusinessScope` se implementan en tickets posteriores de M0.
+  Versionado, aprobación y caducidad de tasas pertenecen a M3.
 - La serialización a JSON y a cada motor SQL (texto canónico, enteros escalados
   o `NUMERIC`) se define con los adaptadores (BP-M0-004).
 - Cambiar de biblioteca decimal solo afecta a `internal/domain/decimal`.

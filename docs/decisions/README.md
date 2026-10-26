@@ -8,5 +8,6 @@ registran cómo se implementan.
 |---|---|---|
 | [0001](0001-repositorio-y-modulo.md) | Repositorio, módulo Go, licencia y estructura | Aceptada |
 | [0002](0002-decimal-exacto-y-redondeo.md) | Decimal exacto y política provisional de redondeo | Aceptada (parámetros provisionales) |
+| [0003](0003-identificadores-y-ambito.md) | Identificadores globales UUIDv7 y ámbito de negocio | Aceptada |
 
 Estados posibles: *Propuesta*, *Aceptada*, *Reemplazada por ADR-xxxx*, *Rechazada*.
