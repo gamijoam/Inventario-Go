@@ -90,11 +90,11 @@ func newDoctorCmd(env Env, flags *globalFlags) *cobra.Command {
 	}
 }
 
-// doctorChecks combina las verificaciones del dominio con las de terminal,
-// que solo la CLI conoce. Las verificaciones de configuración y base de
-// datos se agregan con BP-M0-003 y BP-M0-004.
+// doctorChecks combina las verificaciones del dominio con las de
+// configuración y terminal, que solo la CLI conoce. Las de base de datos se
+// agregan con BP-M0-004.
 func doctorChecks(env Env, flags *globalFlags) []admin.Check {
-	checks := admin.DomainChecks()
+	checks := append(admin.DomainChecks(), configCheck(env, flags))
 	return append(checks, admin.Check{
 		Name: "terminal",
 		Run: func(context.Context) (admin.Status, string) {

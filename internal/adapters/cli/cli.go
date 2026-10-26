@@ -20,6 +20,7 @@ import (
 	"github.com/gamijoam/inventario-go/internal/adapters/tui"
 	"github.com/gamijoam/inventario-go/internal/application/admin"
 	"github.com/gamijoam/inventario-go/internal/platform/buildinfo"
+	"github.com/gamijoam/inventario-go/internal/platform/config"
 )
 
 // Env es todo lo que la CLI necesita del proceso; se inyecta para pruebas.
@@ -33,11 +34,16 @@ type Env struct {
 	Interactive bool
 	// RunTUI abre la interfaz interactiva.
 	RunTUI func(ctx context.Context, in io.Reader, out io.Writer, opts tui.Options) error
+	// ConfigOptions describe dónde y cómo cargar la configuración;
+	// explicitPath proviene de --config.
+	ConfigOptions func(explicitPath string) config.LoadOptions
 }
 
 type globalFlags struct {
-	json    bool
-	noColor bool
+	json       bool
+	noColor    bool
+	configPath string
+	logLevel   string
 }
 
 // Execute ejecuta la CLI con args (sin el nombre del programa) y devuelve el
@@ -93,6 +99,14 @@ func newRootCmd(env Env, flags *globalFlags) *cobra.Command {
 			if !env.Interactive {
 				return usageErrorf("la TUI requiere una terminal interactiva; use un subcomando o 'balanzapro --help'")
 			}
+			// La TUI ocupa la terminal: sin archivo de log configurado, los
+			// registros se descartan en lugar de ir a stderr.
+			rt, err := loadRuntime(env, flags, nil)
+			if err != nil {
+				return err
+			}
+			defer rt.close()
+			rt.logger.Debug("TUI iniciada")
 			opts := tui.Options{
 				NoColor: colorDisabled(env, flags),
 				Build:   buildinfo.Get(),
@@ -104,9 +118,11 @@ func newRootCmd(env Env, flags *globalFlags) *cobra.Command {
 	root.SetVersionTemplate("{{.Version}}\n")
 	root.PersistentFlags().BoolVar(&flags.json, "json", false, "salida JSON estable para automatización")
 	root.PersistentFlags().BoolVar(&flags.noColor, "no-color", false, "desactiva colores (también con NO_COLOR)")
+	root.PersistentFlags().StringVar(&flags.configPath, "config", "", "archivo de configuración (también BALANZAPRO_CONFIG)")
+	root.PersistentFlags().StringVar(&flags.logLevel, "log-level", "", "nivel de log: debug, info, warn o error")
 	root.SetFlagErrorFunc(func(_ *cobra.Command, err error) error { return usageErrorf("%s", err) })
 
-	root.AddCommand(newVersionCmd(flags), newDoctorCmd(env, flags))
+	root.AddCommand(newVersionCmd(flags), newDoctorCmd(env, flags), newConfigCmd(env, flags))
 	return root
 }
 

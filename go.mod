@@ -5,6 +5,7 @@ go 1.27.3
 require (
 	charm.land/bubbletea/v2 v2.1.0
 	charm.land/lipgloss/v2 v2.0.6
+	github.com/BurntSushi/toml v1.6.0
 	github.com/charmbracelet/colorprofile v0.4.3
 	github.com/shopspring/decimal v1.4.0
 	github.com/spf13/cobra v1.10.2

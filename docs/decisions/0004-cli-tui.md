@@ -24,7 +24,8 @@ y sus códigos de salida son un contrato.
    Sin terminal, o con `--json`, falla con código 2 en lugar de colgarse o
    escribir ANSI en un pipe.
 4. **Códigos de salida estables:** `0` correcto, `1` fallo no clasificado,
-   `2` uso inválido (comando, argumento o flag), `3` `doctor` con fallos.
+   `2` uso inválido (comando, argumento o flag), `3` `doctor` con fallos
+   (`4` configuración inválida, agregado en ADR-0005).
    Solo se agregan códigos nuevos; los existentes no cambian de significado.
 5. **JSON:** `--json` escribe en stdout un único documento con campo
    `schema` versionado (`balanzapro.version/v1`, `balanzapro.doctor/v1`). Los
@@ -37,8 +38,8 @@ y sus códigos de salida son un contrato.
 7. **TUI:** pantalla alternativa; teclado (↑/↓ o j/k, enter, esc, q,
    Ctrl+C); aviso si la terminal mide menos de 40×12.
 8. **`doctor`:** verificaciones con nombre estable y detalle sin
-   credenciales. Las de configuración y base de datos se agregan con
-   BP-M0-003 y BP-M0-004.
+   credenciales. La de configuración se agregó con BP-M0-003; la de base de
+   datos se agrega con BP-M0-004.
 9. **Autocompletado:** el comando `completion` de Cobra (bash, zsh, fish,
    powershell).
 

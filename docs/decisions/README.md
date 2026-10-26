@@ -10,5 +10,6 @@ registran cómo se implementan.
 | [0002](0002-decimal-exacto-y-redondeo.md) | Decimal exacto y política provisional de redondeo | Aceptada (parámetros provisionales) |
 | [0003](0003-identificadores-y-ambito.md) | Identificadores globales UUIDv7 y ámbito de negocio | Aceptada |
 | [0004](0004-cli-tui.md) | CLI con Cobra y TUI con Bubble Tea v2 | Aceptada |
+| [0005](0005-configuracion-y-logs.md) | Configuración por archivo y entorno; logs con redacción de secretos | Aceptada |
 
 Estados posibles: *Propuesta*, *Aceptada*, *Reemplazada por ADR-xxxx*, *Rechazada*.

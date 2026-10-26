@@ -5,7 +5,7 @@ Go, operado primero por CLI y TUI, con SQLite para una PC y PostgreSQL para
 multicaja y nube. El alcance aprobado es **V1.CLI**, entregado por hitos M0–M6
 (ver `BalanzaPro_Documento_Maestro_Go_v2.2`, sección 28).
 
-> **Estado:** M0 en curso — dominio base (`BP-M0-001`) y CLI/TUI básica (`BP-M0-002`). No apto para producción.
+> **Estado:** M0 en curso — dominio base (`BP-M0-001`), CLI/TUI básica (`BP-M0-002`) y configuración/logs (`BP-M0-003`). No apto para producción.
 
 ## Qué contiene hoy
 
@@ -21,6 +21,8 @@ multicaja y nube. El alcance aprobado es **V1.CLI**, entregado por hitos M0–M6
 | `internal/adapters/cli` | Comandos Cobra, `--json`, códigos de salida |
 | `internal/adapters/tui` | Interfaz interactiva Bubble Tea v2 / Lip Gloss v2 |
 | `internal/platform/buildinfo` | Versión, commit y fecha de compilación |
+| `internal/platform/config` | Configuración TOML + `BALANZAPRO_*`, secretos redactados |
+| `internal/platform/logging` | Logs `slog` con redacción de secretos |
 | `cmd/balanzapro` | Ejecutable: conecta la CLI/TUI con el proceso |
 
 El dominio no importa CLI, UI, drivers SQL ni HTTP, y `application` no importa
@@ -39,12 +41,15 @@ go build -o bin/balanzapro ./cmd/balanzapro   # en Windows: bin/balanzapro.exe
 balanzapro                  # TUI interactiva (requiere terminal)
 balanzapro version [--json]
 balanzapro doctor [--json]  # diagnóstico sin credenciales
+balanzapro config show [--json]
+balanzapro config path
 balanzapro completion bash|powershell
 balanzapro --help
 ```
 
-Flags globales: `--json` (salida estable para scripts, errores JSON en stderr)
-y `--no-color` (también con la variable `NO_COLOR`).
+Flags globales: `--json` (salida estable para scripts, errores JSON en stderr),
+`--no-color` (también con la variable `NO_COLOR`), `--config <archivo>` y
+`--log-level <nivel>`. Ver [configuración](docs/user-guide/configuracion.md).
 
 | Código de salida | Significado |
 |---|---|
@@ -52,6 +57,7 @@ y `--no-color` (también con la variable `NO_COLOR`).
 | 1 | Fallo no clasificado |
 | 2 | Uso inválido: comando, argumento o flag; no se hizo nada |
 | 3 | `doctor` encontró al menos un fallo |
+| 4 | Configuración inválida |
 
 Para fijar la versión al compilar:
 
@@ -96,6 +102,7 @@ scripts/              verificaciones de CI
 
 ## Documentación
 
+- [Configuración](docs/user-guide/configuracion.md): archivo, variables y logs.
 - [Contribuir](CONTRIBUTING.md): ramas, commits, TDD y puerta de calidad.
 - [Decisiones técnicas (ADR)](docs/decisions/README.md).
 
