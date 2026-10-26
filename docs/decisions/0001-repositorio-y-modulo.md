@@ -22,7 +22,8 @@ dominio, adaptadores SQLite/PostgreSQL, CLI/TUI, servicios y migraciones.
 5. **Regla de dependencias:** `internal/domain` solo importa la biblioteca
    estándar, la biblioteca decimal aprobada (ADR-0002) y paquetes del propio
    dominio. Se verifica en CI con `scripts/check-domain-deps.sh`.
-6. **Versión de Go:** fijada en `go.mod` (1.24.7 al iniciar). CI usa la misma
+6. **Versión de Go:** fijada en `go.mod` (1.24.7 al iniciar; 1.27.3 desde
+   BP-M0-002, requerida por Charm v2). CI usa la misma
    mediante `go-version-file`. Actualizar la versión es un cambio explícito por PR.
 7. **Calidad:** CI con gofmt, `go mod tidy`, vet (Linux y Windows), pruebas en
    Linux y Windows, `-race` en Linux, compilación cruzada con `CGO_ENABLED=0`
@@ -32,6 +33,5 @@ dominio, adaptadores SQLite/PostgreSQL, CLI/TUI, servicios y migraciones.
 
 - La compilación con `CGO_ENABLED=0` condiciona la elección del driver SQLite
   (ADR pendiente en BP-M0-004): favorece un driver en Go puro.
-- `govulncheck` reporta avisos de la biblioteca estándar de Go 1.24.7 que el
-  código actual no alcanza; conviene actualizar a la última versión de
-  parche estable en un PR dedicado.
+- Con Go 1.24.7, `govulncheck` reportaba avisos de la biblioteca estándar;
+  con Go 1.27.3 y `govulncheck` v1.9.0 no hay hallazgos.

@@ -5,7 +5,7 @@ Go, operado primero por CLI y TUI, con SQLite para una PC y PostgreSQL para
 multicaja y nube. El alcance aprobado es **V1.CLI**, entregado por hitos M0–M6
 (ver `BalanzaPro_Documento_Maestro_Go_v2.2`, sección 28).
 
-> **Estado:** M0 en curso — tipos base del dominio (`BP-M0-001`). No apto para producción.
+> **Estado:** M0 en curso — dominio base (`BP-M0-001`) y CLI/TUI básica (`BP-M0-002`). No apto para producción.
 
 ## Qué contiene hoy
 
@@ -17,23 +17,57 @@ multicaja y nube. El alcance aprobado es **V1.CLI**, entregado por hitos M0–M6
 | `internal/domain/id` | Identificadores globales UUIDv7 ordenables, generados en Go |
 | `internal/domain/scope` | `BusinessScope`: organización → empresa → sucursal → almacén |
 | `internal/domain/timezone` | Presentación en `America/Caracas`, persistencia en UTC |
+| `internal/application/admin` | Caso de uso `doctor`: verificaciones del entorno |
+| `internal/adapters/cli` | Comandos Cobra, `--json`, códigos de salida |
+| `internal/adapters/tui` | Interfaz interactiva Bubble Tea v2 / Lip Gloss v2 |
+| `internal/platform/buildinfo` | Versión, commit y fecha de compilación |
+| `cmd/balanzapro` | Ejecutable: conecta la CLI/TUI con el proceso |
 
-El dominio no importa CLI, UI, drivers SQL ni HTTP; `scripts/check-domain-deps.sh`
-lo verifica en CI.
+El dominio no importa CLI, UI, drivers SQL ni HTTP, y `application` no importa
+adaptadores; `scripts/check-domain-deps.sh` lo verifica en CI.
 
 ## Requisitos
 
 - Go (versión fijada en `go.mod`).
 - Linux para desarrollo; los binarios se compilan también para Windows.
 
-## Uso
+## Ejecutable `balanzapro`
+
+```sh
+go build -o bin/balanzapro ./cmd/balanzapro   # en Windows: bin/balanzapro.exe
+
+balanzapro                  # TUI interactiva (requiere terminal)
+balanzapro version [--json]
+balanzapro doctor [--json]  # diagnóstico sin credenciales
+balanzapro completion bash|powershell
+balanzapro --help
+```
+
+Flags globales: `--json` (salida estable para scripts, errores JSON en stderr)
+y `--no-color` (también con la variable `NO_COLOR`).
+
+| Código de salida | Significado |
+|---|---|
+| 0 | Correcto (doctor puede tener advertencias) |
+| 1 | Fallo no clasificado |
+| 2 | Uso inválido: comando, argumento o flag; no se hizo nada |
+| 3 | `doctor` encontró al menos un fallo |
+
+Para fijar la versión al compilar:
+
+```sh
+go build -ldflags "-X github.com/gamijoam/inventario-go/internal/platform/buildinfo.Version=v0.1.0" \
+  -o bin/balanzapro ./cmd/balanzapro
+```
+
+## Desarrollo
 
 ```sh
 go test ./...                  # pruebas
 go test -race ./...            # detector de carreras (Linux)
 go vet ./...
 gofmt -l .                     # debe no listar nada
-./scripts/check-domain-deps.sh # aislamiento del dominio
+./scripts/check-domain-deps.sh # reglas de dependencias entre capas
 GOOS=windows go build ./...    # compilación cruzada
 ```
 
@@ -50,10 +84,14 @@ Se sigue el mapa de la sección 28.4 del documento maestro, **creando cada
 paquete cuando el hito lo necesita**; no hay carpetas vacías por anticipado.
 
 ```text
-internal/domain/   reglas puras: dinero, tasas, cantidades, IDs, ámbitos, zona horaria
-docs/decisions/    registro de decisiones técnicas (ADR)
-scripts/           verificaciones de CI
-.github/workflows/ CI
+cmd/balanzapro/       ejecutable CLI/TUI
+internal/domain/      reglas puras: dinero, tasas, cantidades, IDs, ámbitos, zona horaria
+internal/application/ casos de uso
+internal/adapters/    CLI y TUI
+internal/platform/    infraestructura transversal
+docs/decisions/       registro de decisiones técnicas (ADR)
+scripts/              verificaciones de CI
+.github/workflows/    CI
 ```
 
 ## Documentación
