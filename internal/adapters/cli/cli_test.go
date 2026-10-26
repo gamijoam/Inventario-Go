@@ -10,6 +10,7 @@ import (
 
 	"github.com/gamijoam/inventario-go/internal/adapters/cli"
 	"github.com/gamijoam/inventario-go/internal/adapters/tui"
+	"github.com/gamijoam/inventario-go/internal/platform/config"
 )
 
 type result struct {
@@ -23,13 +24,20 @@ type result struct {
 type runOpts struct {
 	interactive bool
 	env         map[string]string
+	home        string
 }
 
 func run(t *testing.T, o runOpts, args ...string) result {
 	t.Helper()
 	var out, errOut bytes.Buffer
 	var r result
+	if o.home == "" {
+		o.home = t.TempDir()
+	}
 	r.code = cli.Execute(context.Background(), args, cli.Env{
+		ConfigOptions: func(explicit string) config.LoadOptions {
+			return config.LoadOptions{ExplicitPath: explicit, Getenv: func(k string) string { return o.env[k] }, GOOS: "linux", HomeDir: o.home}
+		},
 		In:          strings.NewReader(""),
 		Out:         &out,
 		Err:         &errOut,

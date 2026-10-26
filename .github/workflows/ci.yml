@@ -62,6 +62,7 @@ jobs:
           go build -o "$bin" ./cmd/balanzapro
           "$bin" version --json
           "$bin" doctor --json
+          "$bin" config show --json
           # Sin terminal, el comando sin subcomando no abre la TUI: código 2.
           set +e; "$bin" < /dev/null; code=$?; set -e
           test "$code" -eq 2
