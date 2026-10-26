@@ -122,7 +122,7 @@ func newRootCmd(env Env, flags *globalFlags) *cobra.Command {
 	root.PersistentFlags().StringVar(&flags.logLevel, "log-level", "", "nivel de log: debug, info, warn o error")
 	root.SetFlagErrorFunc(func(_ *cobra.Command, err error) error { return usageErrorf("%s", err) })
 
-	root.AddCommand(newVersionCmd(flags), newDoctorCmd(env, flags), newConfigCmd(env, flags))
+	root.AddCommand(newVersionCmd(flags), newDoctorCmd(env, flags), newConfigCmd(env, flags), newDBCmd(env, flags))
 	return root
 }
 

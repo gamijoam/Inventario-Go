@@ -13,6 +13,8 @@ const (
 	ExitCheckFailed = 3
 	// ExitConfig: la configuración (archivo o entorno) es inválida.
 	ExitConfig = 4
+	// ExitUnavailable: no se pudo conectar con la base de datos.
+	ExitUnavailable = 5
 )
 
 // exitError asocia un error con su código de salida. Si silent es true, el
@@ -32,6 +34,10 @@ func usageErrorf(format string, args ...any) error {
 
 func configError(err error) error {
 	return &exitError{code: ExitConfig, kind: "config", msg: err.Error()}
+}
+
+func unavailableError(err error) error {
+	return &exitError{code: ExitUnavailable, kind: "unavailable", msg: err.Error()}
 }
 
 func checkFailed() error {

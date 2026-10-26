@@ -31,7 +31,7 @@ dominio, adaptadores SQLite/PostgreSQL, CLI/TUI, servicios y migraciones.
 
 ## Consecuencias
 
-- La compilación con `CGO_ENABLED=0` condiciona la elección del driver SQLite
-  (ADR pendiente en BP-M0-004): favorece un driver en Go puro.
+- La compilación con `CGO_ENABLED=0` condiciona la elección del driver SQLite:
+  se eligió uno en Go puro (ADR-0006).
 - Con Go 1.24.7, `govulncheck` reportaba avisos de la biblioteca estándar;
   con Go 1.27.3 y `govulncheck` v1.9.0 no hay hallazgos.

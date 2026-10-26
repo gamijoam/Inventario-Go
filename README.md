@@ -5,7 +5,7 @@ Go, operado primero por CLI y TUI, con SQLite para una PC y PostgreSQL para
 multicaja y nube. El alcance aprobado es **V1.CLI**, entregado por hitos M0–M6
 (ver `BalanzaPro_Documento_Maestro_Go_v2.2`, sección 28).
 
-> **Estado:** M0 en curso — dominio base (`BP-M0-001`), CLI/TUI básica (`BP-M0-002`) y configuración/logs (`BP-M0-003`). No apto para producción.
+> **Estado:** M0 en curso — dominio base (`BP-M0-001`), CLI/TUI básica (`BP-M0-002`), configuración/logs (`BP-M0-003`) y SQLite/PostgreSQL con migraciones (`BP-M0-004`). No apto para producción.
 
 ## Qué contiene hoy
 
@@ -23,6 +23,9 @@ multicaja y nube. El alcance aprobado es **V1.CLI**, entregado por hitos M0–M6
 | `internal/platform/buildinfo` | Versión, commit y fecha de compilación |
 | `internal/platform/config` | Configuración TOML + `BALANZAPRO_*`, secretos redactados |
 | `internal/platform/logging` | Logs `slog` con redacción de secretos |
+| `internal/platform/migration` | Migrador SQL versionado, transaccional y concurrente |
+| `internal/adapters/persistence` | Conexión SQLite (modernc) y PostgreSQL (pgx), identidad de la instalación |
+| `migrations/` | SQL nativo por motor (`sqlite/`, `postgres/`), embebido en el ejecutable |
 | `cmd/balanzapro` | Ejecutable: conecta la CLI/TUI con el proceso |
 
 El dominio no importa CLI, UI, drivers SQL ni HTTP, y `application` no importa
@@ -43,6 +46,8 @@ balanzapro version [--json]
 balanzapro doctor [--json]  # diagnóstico sin credenciales
 balanzapro config show [--json]
 balanzapro config path
+balanzapro db status [--json]     # no crea ni modifica la base
+balanzapro db migrate [--json]    # crea la base y aplica migraciones
 balanzapro completion bash|powershell
 balanzapro --help
 ```
@@ -58,6 +63,7 @@ Flags globales: `--json` (salida estable para scripts, errores JSON en stderr),
 | 2 | Uso inválido: comando, argumento o flag; no se hizo nada |
 | 3 | `doctor` encontró al menos un fallo |
 | 4 | Configuración inválida |
+| 5 | Base de datos no disponible |
 
 Para fijar la versión al compilar:
 
@@ -74,7 +80,15 @@ go test -race ./...            # detector de carreras (Linux)
 go vet ./...
 gofmt -l .                     # debe no listar nada
 ./scripts/check-domain-deps.sh # reglas de dependencias entre capas
+./scripts/smoke.sh             # prueba de humo del ejecutable real
 GOOS=windows go build ./...    # compilación cruzada
+```
+
+Pruebas contra PostgreSQL (se omiten si no hay servidor):
+
+```sh
+export BALANZAPRO_TEST_POSTGRES_URL='postgres://usuario:clave@127.0.0.1:5432/postgres?sslmode=disable'
+go test ./...   # crea y elimina bases bp_test_* (el usuario necesita CREATEDB)
 ```
 
 En PowerShell:
@@ -91,9 +105,10 @@ paquete cuando el hito lo necesita**; no hay carpetas vacías por anticipado.
 
 ```text
 cmd/balanzapro/       ejecutable CLI/TUI
+migrations/           SQL versionado por motor
 internal/domain/      reglas puras: dinero, tasas, cantidades, IDs, ámbitos, zona horaria
 internal/application/ casos de uso
-internal/adapters/    CLI y TUI
+internal/adapters/    CLI, TUI y persistencia
 internal/platform/    infraestructura transversal
 docs/decisions/       registro de decisiones técnicas (ADR)
 scripts/              verificaciones de CI

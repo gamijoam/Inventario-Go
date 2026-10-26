@@ -25,7 +25,8 @@ y sus códigos de salida son un contrato.
    escribir ANSI en un pipe.
 4. **Códigos de salida estables:** `0` correcto, `1` fallo no clasificado,
    `2` uso inválido (comando, argumento o flag), `3` `doctor` con fallos
-   (`4` configuración inválida, agregado en ADR-0005).
+   (`4` configuración inválida, ADR-0005; `5` base de datos no disponible,
+   ADR-0006).
    Solo se agregan códigos nuevos; los existentes no cambian de significado.
 5. **JSON:** `--json` escribe en stdout un único documento con campo
    `schema` versionado (`balanzapro.version/v1`, `balanzapro.doctor/v1`). Los

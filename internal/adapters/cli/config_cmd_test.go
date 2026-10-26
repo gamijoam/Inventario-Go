@@ -114,14 +114,16 @@ func TestDoctorReportsInvalidConfigWithoutSecrets(t *testing.T) {
 	}
 }
 
-func TestDoctorWarnsAboutWorldReadableSecretsButStaysHealthy(t *testing.T) {
+func TestDoctorWarnsAboutWorldReadableSecrets(t *testing.T) {
 	skipOnWindows(t)
 	path := writeConfig(t, "[database]\ndriver = \"postgres\"\n[database.postgres]\nurl = \"postgres://u:"+pw+"@h/d\"\n", 0o644)
 	if err := os.Chmod(path, 0o644); err != nil {
 		t.Fatal(err)
 	}
+	// El host es ficticio, así que la verificación database falla (código 3);
+	// aquí importa la advertencia de config y que el secreto no aparezca.
 	r := run(t, runOpts{}, "doctor", "--config", path)
-	if r.code != cli.ExitOK || !strings.Contains(r.stdout, "[WARN] config") || strings.Contains(r.stdout, pw) {
+	if !strings.Contains(r.stdout, "[WARN] config") || strings.Contains(r.stdout+r.stderr, pw) {
 		t.Fatalf("code=%d stdout=\n%s", r.code, r.stdout)
 	}
 }

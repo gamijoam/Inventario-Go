@@ -38,13 +38,25 @@ jobs:
       - name: Reglas de dependencias entre capas
         run: ./scripts/check-domain-deps.sh
 
-  test:
-    name: Pruebas (${{ matrix.os }})
-    strategy:
-      fail-fast: false
-      matrix:
-        os: [ubuntu-latest, windows-latest]
-    runs-on: ${{ matrix.os }}
+  test-linux:
+    name: Pruebas (Linux, SQLite y PostgreSQL)
+    runs-on: ubuntu-latest
+    services:
+      postgres:
+        image: postgres:16
+        env:
+          POSTGRES_PASSWORD: ci-only-password
+        ports:
+          - 5432:5432
+        options: >-
+          --health-cmd "pg_isready -U postgres"
+          --health-interval 5s
+          --health-timeout 5s
+          --health-retries 10
+    env:
+      # Credenciales de un contenedor efímero de CI, no de un entorno real.
+      BALANZAPRO_TEST_POSTGRES_URL: postgres://postgres:ci-only-password@127.0.0.1:5432/postgres?sslmode=disable
+      BALANZAPRO_REQUIRE_POSTGRES: "1"
     steps:
       - uses: actions/checkout@v4
       - uses: actions/setup-go@v5
@@ -53,19 +65,25 @@ jobs:
       - name: go test
         run: go test ./...
       - name: go test -race
-        if: runner.os == 'Linux'
         run: go test -race ./...
       - name: Prueba de humo del ejecutable
+        env:
+          BALANZAPRO_SMOKE_POSTGRES_URL: postgres://postgres:ci-only-password@127.0.0.1:5432/postgres?sslmode=disable
+        run: ./scripts/smoke.sh
+
+  test-windows:
+    name: Pruebas (Windows, SQLite)
+    runs-on: windows-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-go@v5
+        with:
+          go-version-file: go.mod
+      - name: go test
+        run: go test ./...
+      - name: Prueba de humo del ejecutable
         shell: bash
-        run: |
-          bin="bin/balanzapro$(go env GOEXE)"
-          go build -o "$bin" ./cmd/balanzapro
-          "$bin" version --json
-          "$bin" doctor --json
-          "$bin" config show --json
-          # Sin terminal, el comando sin subcomando no abre la TUI: código 2.
-          set +e; "$bin" < /dev/null; code=$?; set -e
-          test "$code" -eq 2
+        run: ./scripts/smoke.sh
 
   build:
     name: Compilación ${{ matrix.goos }}/${{ matrix.goarch }}
