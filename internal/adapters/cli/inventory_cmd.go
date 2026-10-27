@@ -106,6 +106,8 @@ var kindText = map[inventory.Kind]string{
 	inventory.KindReservationOut: "despacho",
 	inventory.KindCountIn:        "conteo +",
 	inventory.KindCountOut:       "conteo −",
+	inventory.KindPurchaseIn:     "compra",
+	inventory.KindRevaluation:    "revaloración",
 }
 
 // whereFlags agrega --company, --branch y --warehouse. Sin --company ni

@@ -88,6 +88,9 @@ Flags globales: `--json` (salida estable para scripts, errores JSON en stderr),
 | 9 | Sin sesión válida (`balanzapro auth login`) o credenciales incorrectas |
 | 10 | Existencia disponible insuficiente para la salida |
 
+Los ejecutables listos para Windows y Linux se publican en **Releases**; ver
+[Instalar y probar](docs/user-guide/instalar.md).
+
 Para fijar la versión al compilar:
 
 ```sh
@@ -140,6 +143,7 @@ scripts/              verificaciones de CI
 
 ## Documentación
 
+- [Instalar y probar](docs/user-guide/instalar.md): descargar el release (Windows/Linux) y un recorrido de prueba.
 - [Primeros pasos](docs/user-guide/primeros-pasos.md): instalación, `setup` y estructura del negocio.
 - [Usuarios y permisos](docs/user-guide/usuarios-y-permisos.md): sesión, usuarios, roles y ámbitos.
 - [Catálogo](docs/user-guide/catalogo.md): productos, SKU, códigos de barras y unidades.

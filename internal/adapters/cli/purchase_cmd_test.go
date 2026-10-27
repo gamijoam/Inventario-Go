@@ -68,6 +68,9 @@ func TestPurchasingFromTheCLI(t *testing.T) {
 	if r := run(t, admin, "purchase", "receipt", "show", number); !strings.Contains(r.stdout, "Aduana (tardío)") || !strings.Contains(r.stdout, "diferencia") {
 		t.Errorf("show: %s", r.stdout)
 	}
+	if r := run(t, admin, "inventory", "kardex", "--product", "HARINA"); !strings.Contains(r.stdout, "compra") || !strings.Contains(r.stdout, "revaloración") {
+		t.Errorf("kardex sin el tipo de compra o revaloración:\n%s", r.stdout)
+	}
 
 	// Costos separados.
 	mustRun(t, admin, "purchase", "cost", "set-replacement", "--product", "HARINA", "--unit-cost", "85", "--note", "cotización")
