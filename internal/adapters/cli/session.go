@@ -226,6 +226,8 @@ func appError(err error) error {
 		return &exitError{code: ExitConflict, kind: "conflict", msg: err.Error()}
 	case errors.Is(err, apporg.ErrNotFound), errors.Is(err, apporg.ErrNotBootstrapped):
 		return &exitError{code: ExitNotFound, kind: "not_found", msg: err.Error()}
+	case errors.Is(err, inventory.ErrValuation):
+		return &exitError{code: ExitConflict, kind: "conflict", msg: err.Error()}
 	case errors.Is(err, inventory.ErrInsufficient):
 		return &exitError{code: ExitInsufficientStock, kind: "insufficient_stock", msg: err.Error()}
 	case errors.Is(err, org.ErrInvalid), errors.Is(err, identity.ErrInvalid), errors.Is(err, catalog.ErrInvalid), errors.Is(err, inventory.ErrInvalid):

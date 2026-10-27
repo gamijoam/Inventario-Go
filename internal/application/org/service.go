@@ -16,6 +16,7 @@ import (
 
 	"github.com/gamijoam/inventario-go/internal/domain/id"
 	"github.com/gamijoam/inventario-go/internal/domain/identity"
+	"github.com/gamijoam/inventario-go/internal/domain/money"
 	"github.com/gamijoam/inventario-go/internal/domain/org"
 	"github.com/gamijoam/inventario-go/internal/domain/scope"
 )
@@ -80,6 +81,7 @@ type BootstrapInput struct {
 	OrganizationCode, OrganizationName string
 	CompanyCode, CompanyLegalName      string
 	RIF                                string // opcional
+	Currency                           string // de valoración; vacío es USD
 	BranchCode, BranchName             string
 	WarehouseCode, WarehouseName       string
 }
@@ -112,12 +114,9 @@ func (s *Service) Bootstrap(ctx context.Context, in BootstrapInput) (Bootstrappe
 // BootstrapTx es Bootstrap dentro de una transacción ajena, para que el alta
 // de usuarios (BP-M1-002) ocurra en la misma unidad de trabajo.
 func BootstrapTx(ctx context.Context, r Repository, in BootstrapInput, now time.Time) (Bootstrapped, error) {
-	var rif org.RIF
-	if in.RIF != "" {
-		var err error
-		if rif, err = org.ParseRIF(in.RIF); err != nil {
-			return Bootstrapped{}, err
-		}
+	rif, cur, err := companyDetails(in.RIF, in.Currency)
+	if err != nil {
+		return Bootstrapped{}, err
 	}
 	o, err := org.NewOrganization(in.OrganizationCode, in.OrganizationName, now)
 	if err != nil {
@@ -127,6 +126,7 @@ func BootstrapTx(ctx context.Context, r Repository, in BootstrapInput, now time.
 	if err != nil {
 		return Bootstrapped{}, err
 	}
+	c.Currency = cur
 	b, err := org.NewBranch(c, in.BranchCode, in.BranchName, now)
 	if err != nil {
 		return Bootstrapped{}, err
@@ -199,17 +199,32 @@ func CurrentTx(ctx context.Context, r Repository) (Context, error) {
 	return out, err
 }
 
-// CreateCompany crea una empresa legal; requiere un ámbito de organización.
-func (s *Service) CreateCompany(ctx context.Context, p identity.Principal, code, legalName, rif string) (org.Company, error) {
+// companyDetails valida el RIF (opcional) y la moneda de valoración
+// (vacía es la predeterminada).
+func companyDetails(rif, currency string) (org.RIF, money.Currency, error) {
 	var parsed org.RIF
 	if rif != "" {
 		var err error
 		if parsed, err = org.ParseRIF(rif); err != nil {
-			return org.Company{}, err
+			return org.RIF{}, money.Currency{}, err
 		}
 	}
+	if currency == "" {
+		return parsed, org.DefaultCurrency, nil
+	}
+	cur, err := org.ParseCurrency(currency)
+	return parsed, cur, err
+}
+
+// CreateCompany crea una empresa legal; requiere un ámbito de organización.
+// currency es la moneda de valoración del inventario; vacía es USD.
+func (s *Service) CreateCompany(ctx context.Context, p identity.Principal, code, legalName, rif, currency string) (org.Company, error) {
+	parsed, cur, err := companyDetails(rif, currency)
+	if err != nil {
+		return org.Company{}, err
+	}
 	var c org.Company
-	err := s.store.InTx(ctx, func(r Repository) error {
+	err = s.store.InTx(ctx, func(r Repository) error {
 		o, err := r.Organization(ctx, p.OrganizationID)
 		if err != nil {
 			return err
@@ -217,6 +232,7 @@ func (s *Service) CreateCompany(ctx context.Context, p identity.Principal, code,
 		if c, err = org.NewCompany(o, code, legalName, parsed, s.now()); err != nil {
 			return err
 		}
+		c.Currency = cur
 		if err := p.Authorize(identity.PermCompanyCreate, c.Scope(), "la organización "+o.Code.String()); err != nil {
 			return err
 		}

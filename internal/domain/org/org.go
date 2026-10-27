@@ -17,6 +17,7 @@ import (
 	"unicode/utf8"
 
 	"github.com/gamijoam/inventario-go/internal/domain/id"
+	"github.com/gamijoam/inventario-go/internal/domain/money"
 	"github.com/gamijoam/inventario-go/internal/domain/scope"
 )
 
@@ -89,6 +90,23 @@ func (r RIF) String() string { return r.v }
 // IsZero indica que la empresa no tiene RIF registrado.
 func (r RIF) IsZero() bool { return r.v == "" }
 
+// DefaultCurrency es la moneda de valoración del inventario (CPP y valor
+// de los saldos) si no se indica otra. Cada empresa fija la suya al crearse
+// (ratificado 2026-10-27) y no cambia: hacerlo exigiría revalorizar todo
+// su kardex.
+var DefaultCurrency = money.USD
+
+// ParseCurrency admite las monedas de valoración habilitadas: USD y VES.
+func ParseCurrency(s string) (money.Currency, error) {
+	switch strings.ToUpper(strings.TrimSpace(s)) {
+	case money.USD.Code():
+		return money.USD, nil
+	case money.VES.Code():
+		return money.VES, nil
+	}
+	return money.Currency{}, fmt.Errorf("%w: moneda de valoración %q (use USD o VES)", ErrInvalid, s)
+}
+
 // Organization es el tenant: frontera entre clientes de BalanzaPro.
 type Organization struct {
 	ID        id.ID
@@ -105,6 +123,7 @@ type Company struct {
 	Code           Code
 	LegalName      Name
 	RIF            RIF
+	Currency       money.Currency // de valoración del inventario
 	Status         Status
 	CreatedAt      time.Time
 }
@@ -148,7 +167,7 @@ func NewCompany(parent Organization, code, legalName string, rif RIF, now time.T
 	if err != nil {
 		return Company{}, err
 	}
-	return Company{ID: id.MustNew(), OrganizationID: parent.ID, Code: c, LegalName: n, RIF: rif, Status: StatusActive, CreatedAt: now.UTC()}, nil
+	return Company{ID: id.MustNew(), OrganizationID: parent.ID, Code: c, LegalName: n, RIF: rif, Currency: DefaultCurrency, Status: StatusActive, CreatedAt: now.UTC()}, nil
 }
 
 func NewBranch(parent Company, code, name string, now time.Time) (Branch, error) {

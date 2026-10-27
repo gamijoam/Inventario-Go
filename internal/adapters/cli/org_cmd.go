@@ -31,6 +31,7 @@ type companyJSON struct {
 	Code           string `json:"code"`
 	LegalName      string `json:"legal_name"`
 	RIF            string `json:"rif"`
+	Currency       string `json:"valuation_currency"`
 	Status         string `json:"status"`
 	CreatedAt      string `json:"created_at"`
 }
@@ -62,7 +63,7 @@ func toOrgJSON(o org.Organization) orgJSON {
 }
 
 func toCompanyJSON(c org.Company) companyJSON {
-	return companyJSON{c.ID.String(), c.OrganizationID.String(), c.Code.String(), c.LegalName.String(), c.RIF.String(), string(c.Status), rfc3339(c.CreatedAt)}
+	return companyJSON{c.ID.String(), c.OrganizationID.String(), c.Code.String(), c.LegalName.String(), c.RIF.String(), c.Currency.Code(), string(c.Status), rfc3339(c.CreatedAt)}
 }
 
 func toBranchJSON(b org.Branch, companyCode string) branchJSON {
@@ -124,6 +125,7 @@ func newSetupCmd(env Env, flags *globalFlags) *cobra.Command {
 	f.StringVar(&in.OrganizationCode, "code", "", "código de la organización (por defecto, derivado del nombre)")
 	f.StringVar(&in.CompanyLegalName, "legal-name", "", "razón social de la empresa (por defecto, el nombre)")
 	f.StringVar(&in.RIF, "rif", "", "RIF de la empresa, p. ej. J-12345678-9 (opcional)")
+	f.StringVar(&in.Currency, "currency", "USD", "moneda de valoración del inventario de la empresa: USD o VES (no se puede cambiar)")
 	f.StringVar(&in.CompanyCode, "company-code", "PRINCIPAL", "código de la empresa")
 	f.StringVar(&in.BranchName, "branch-name", "Principal", "nombre de la sucursal")
 	f.StringVar(&in.BranchCode, "branch-code", "PRINCIPAL", "código de la sucursal")
@@ -270,22 +272,22 @@ func newCompanyCmd(env Env, flags *globalFlags) *cobra.Command {
 					return writeJSON(cmd.OutOrStdout(), listPayload("balanzapro.companies/v1", items))
 				}
 				tw := tabwriter.NewWriter(cmd.OutOrStdout(), 0, 0, 2, ' ', 0)
-				fmt.Fprintln(tw, "CÓDIGO\tRAZÓN SOCIAL\tRIF\tESTADO")
+				fmt.Fprintln(tw, "CÓDIGO\tRAZÓN SOCIAL\tRIF\tMONEDA\tESTADO")
 				for _, c := range list {
-					fmt.Fprintf(tw, "%s\t%s\t%s\t%s\n", c.Code, c.LegalName, orDash(c.RIF.String()), statusText(c.Status))
+					fmt.Fprintf(tw, "%s\t%s\t%s\t%s\t%s\n", c.Code, c.LegalName, orDash(c.RIF.String()), c.Currency, statusText(c.Status))
 				}
 				return tw.Flush()
 			})
 		},
 	})
-	var code, legalName, rif string
+	var code, legalName, rif, currency string
 	create := &cobra.Command{
 		Use:   "create",
 		Short: "Crea una empresa legal",
 		Args:  noArgs,
 		RunE: func(cmd *cobra.Command, _ []string) error {
 			return withSession(cmd, env, flags, func(ctx context.Context, s appSession) error {
-				c, err := s.org.CreateCompany(ctx, s.principal(), code, legalName, rif)
+				c, err := s.org.CreateCompany(ctx, s.principal(), code, legalName, rif, currency)
 				if err != nil {
 					return appError(err)
 				}
@@ -295,7 +297,7 @@ func newCompanyCmd(env Env, flags *globalFlags) *cobra.Command {
 						companyJSON
 					}{"balanzapro.company/v1", toCompanyJSON(c)})
 				}
-				fmt.Fprintf(cmd.OutOrStdout(), "empresa creada: %s %s%s\n", c.Code, c.LegalName, rifSuffix(c.RIF))
+				fmt.Fprintf(cmd.OutOrStdout(), "empresa creada: %s %s%s, valora en %s\n", c.Code, c.LegalName, rifSuffix(c.RIF), c.Currency)
 				return nil
 			})
 		},
@@ -303,6 +305,7 @@ func newCompanyCmd(env Env, flags *globalFlags) *cobra.Command {
 	create.Flags().StringVar(&code, "code", "", "código único en la organización (obligatorio)")
 	create.Flags().StringVar(&legalName, "legal-name", "", "razón social (obligatoria)")
 	create.Flags().StringVar(&rif, "rif", "", "RIF, p. ej. J-12345678-9 (opcional)")
+	create.Flags().StringVar(&currency, "currency", "", "moneda de valoración del inventario: USD o VES (por defecto USD; no se puede cambiar)")
 	markRequired(create, "code", "legal-name")
 	cmd.AddCommand(create)
 	return cmd

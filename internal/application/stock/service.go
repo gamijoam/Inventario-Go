@@ -1,6 +1,8 @@
 // Package stock contiene los casos de uso de existencias y kardex
 // (BP-M2-001): ajustes de entrada y salida, reversos, consulta de saldos y
-// kardex, y verificación de que cada saldo coincide con su kardex.
+// kardex, y verificación de que cada saldo coincide con su kardex. Desde
+// BP-M2-002 cada movimiento se valora a costo promedio ponderado por
+// producto y almacén, y hay transferencias entre almacenes de una sucursal.
 //
 // Cada escritura ocurre en una transacción que lee el saldo, aplica el
 // movimiento y actualiza el saldo solo si nadie lo cambió entretanto
@@ -68,6 +70,15 @@ type Repository interface {
 	ReversalOf(ctx context.Context, orgID, movementID id.ID) (inventory.Movement, error)
 	// Movements en orden de secuencia; limit 0 trae todos.
 	Movements(ctx context.Context, orgID, warehouseID, productID id.ID, limit, offset int) ([]inventory.Movement, error)
+
+	// InsertTransfer devuelve ErrConcurrent si la clave de idempotencia ya
+	// existe. Se inserta antes que sus dos movimientos.
+	InsertTransfer(ctx context.Context, t inventory.Transfer) error
+	Transfer(ctx context.Context, orgID, transferID id.ID) (inventory.Transfer, error)
+	TransferByKey(ctx context.Context, orgID id.ID, idempotencyKey string) (inventory.Transfer, error)
+	Transfers(ctx context.Context, orgID id.ID) ([]inventory.Transfer, error)
+	// TransferMovements devuelve las dos patas: salida y entrada.
+	TransferMovements(ctx context.Context, orgID, transferID id.ID) ([]inventory.Movement, error)
 }
 
 type Store interface {
@@ -185,10 +196,13 @@ type MovementView struct {
 
 // AdjustInput es un ajuste manual.
 type AdjustInput struct {
-	Where          WarehouseRef
-	Product        string // SKU, código de barras o ID
-	Direction      inventory.Direction
-	Quantity       string
+	Where     WarehouseRef
+	Product   string // SKU, código de barras o ID
+	Direction inventory.Direction
+	Quantity  string
+	// UnitCost es el costo unitario de una entrada en la moneda de
+	// valoración de la empresa. Vacío entra al CPP vigente, que debe existir.
+	UnitCost       string
 	Reason, Note   string
 	IdempotencyKey string
 }
@@ -226,6 +240,17 @@ func (s *Service) Adjust(ctx context.Context, p identity.Principal, in AdjustInp
 	if err != nil {
 		return MovementView{}, err
 	}
+	var costing inventory.Costing
+	if strings.TrimSpace(in.UnitCost) != "" {
+		if in.Direction == inventory.Out {
+			return MovementView{}, fmt.Errorf("%w: una salida se valora al costo promedio; no indique costo unitario", inventory.ErrInvalid)
+		}
+		uc, err := inventory.ParseUnitCost(in.UnitCost)
+		if err != nil {
+			return MovementView{}, err
+		}
+		costing.UnitCost = inventory.Known(uc)
+	}
 	var out MovementView
 	err = s.write(ctx, func(r Repository) error {
 		loc, err := locate(ctx, r, p, in.Where, identity.PermStockAdjust)
@@ -247,7 +272,7 @@ func (s *Service) Adjust(ctx context.Context, p identity.Principal, in AdjustInp
 		if in.Direction == inventory.Out {
 			qty = qty.Neg()
 		}
-		hash := digest("adjust", loc.Warehouse.ID.String(), prod.ID.String(), qty.StringFixed(unit.Scale), string(reason), note)
+		hash := digest("adjust", loc.Warehouse.ID.String(), prod.ID.String(), qty.StringFixed(unit.Scale), string(reason), note, costing.UnitCost.String())
 		if prior, done, err := replayed(ctx, r, p.OrganizationID, key, hash); err != nil || done {
 			if done {
 				out, err = s.view(ctx, r, prior)
@@ -266,7 +291,7 @@ func (s *Service) Adjust(ctx context.Context, p identity.Principal, in AdjustInp
 			kind = inventory.KindAdjustmentOut
 		}
 		m := inventory.Movement{Kind: kind, Reason: reason, Quantity: qty, Note: note, IdempotencyKey: key, RequestHash: hash}
-		m, err = s.apply(ctx, r, p, loc, prod.ID, m)
+		m, err = s.apply(ctx, r, p, loc, prod.ID, m, costing)
 		if err != nil {
 			return err
 		}
@@ -295,35 +320,71 @@ func replayed(ctx context.Context, r Repository, orgID id.ID, key, hash string) 
 }
 
 // apply lee el saldo, aplica el movimiento y guarda ambos.
-func (s *Service) apply(ctx context.Context, r Repository, p identity.Principal, loc Location, productID id.ID, m inventory.Movement) (inventory.Movement, error) {
-	now := s.now().UTC()
-	key := inventory.Key{Scope: loc.Warehouse.Scope(), ProductID: productID}
-	b, err := r.BalanceForUpdate(ctx, p.OrganizationID, loc.Warehouse.ID, productID)
-	isNew := errors.Is(err, apporg.ErrNotFound)
-	if isNew {
-		b = inventory.Balance{Key: key}
-	} else if err != nil {
+func (s *Service) apply(ctx context.Context, r Repository, p identity.Principal, loc Location, productID id.ID, m inventory.Movement, c inventory.Costing) (inventory.Movement, error) {
+	l, err := lockBalance(ctx, r, p.OrganizationID, loc, productID)
+	if err != nil {
 		return inventory.Movement{}, err
 	}
+	return s.post(ctx, r, p, l, m, c)
+}
+
+// locked es un saldo leído con bloqueo, o uno nuevo aún sin fila.
+type locked struct {
+	inventory.Balance
+	isNew bool
+}
+
+func lockBalance(ctx context.Context, r Repository, orgID id.ID, loc Location, productID id.ID) (locked, error) {
+	b, err := r.BalanceForUpdate(ctx, orgID, loc.Warehouse.ID, productID)
+	if errors.Is(err, apporg.ErrNotFound) {
+		return locked{Balance: inventory.Balance{Key: inventory.Key{Scope: loc.Warehouse.Scope(), ProductID: productID}}, isNew: true}, nil
+	}
+	return locked{Balance: b}, err
+}
+
+// post aplica m sobre un saldo ya bloqueado y guarda saldo y movimiento.
+func (s *Service) post(ctx context.Context, r Repository, p identity.Principal, l locked, m inventory.Movement, c inventory.Costing) (inventory.Movement, error) {
+	st, err := s.stage(p, l, m, c)
+	if err != nil {
+		return inventory.Movement{}, err
+	}
+	return st.m, st.commit(ctx, r)
+}
+
+// staged es un movimiento aplicado en memoria, pendiente de guardar.
+type staged struct {
+	b     inventory.Balance
+	prev  int64
+	isNew bool
+	m     inventory.Movement
+}
+
+func (s *Service) stage(p identity.Principal, l locked, m inventory.Movement, c inventory.Costing) (staged, error) {
+	now := s.now().UTC()
 	mid, err := id.New()
 	if err != nil {
-		return inventory.Movement{}, err
+		return staged{}, err
 	}
-	m.ID, m.Key, m.ActorID, m.OccurredAt = mid, key, p.UserID, now
-	prev := b.Version
-	b, m, err = inventory.Apply(b, m, now)
+	m.ID, m.Key, m.ActorID, m.OccurredAt = mid, l.Key, p.UserID, now
+	b, m, err := inventory.Apply(l.Balance, m, c, now)
 	if err != nil {
-		return inventory.Movement{}, err
+		return staged{}, err
 	}
-	if isNew {
-		err = r.InsertBalance(ctx, b)
+	return staged{b: b, prev: l.Version, isNew: l.isNew, m: m}, nil
+}
+
+// commit guarda el saldo y luego el movimiento, que debe coincidir con él.
+func (st staged) commit(ctx context.Context, r Repository) error {
+	var err error
+	if st.isNew {
+		err = r.InsertBalance(ctx, st.b)
 	} else {
-		err = r.UpdateBalance(ctx, b, prev)
+		err = r.UpdateBalance(ctx, st.b, st.prev)
 	}
 	if err != nil {
-		return inventory.Movement{}, err
+		return err
 	}
-	return m, r.InsertMovement(ctx, m)
+	return r.InsertMovement(ctx, st.m)
 }
 
 // Reverse anula el efecto de un movimiento con otro de signo contrario. El
@@ -367,6 +428,9 @@ func (s *Service) Reverse(ctx context.Context, p identity.Principal, movementID,
 		if orig.Kind == inventory.KindReversal {
 			return fmt.Errorf("%w: un reverso no se revierte; registre un ajuste nuevo", inventory.ErrInvalid)
 		}
+		if !orig.TransferID.IsZero() {
+			return fmt.Errorf("%w: una transferencia no se revierte por partes; registre una transferencia en sentido contrario", inventory.ErrInvalid)
+		}
 		if _, err := r.ReversalOf(ctx, p.OrganizationID, orig.ID); err == nil {
 			return ErrAlreadyReversed
 		} else if !errors.Is(err, apporg.ErrNotFound) {
@@ -374,13 +438,180 @@ func (s *Service) Reverse(ctx context.Context, p identity.Principal, movementID,
 		}
 		m := inventory.Movement{Kind: inventory.KindReversal, Reason: inventory.ReasonReversal, Quantity: orig.Quantity.Neg(),
 			Note: n, ReversesID: orig.ID, IdempotencyKey: key, RequestHash: hash}
-		if m, err = s.apply(ctx, r, p, loc, orig.ProductID, m); err != nil {
+		// Deshace exactamente el valor original; si no tenía costo, el
+		// reverso tampoco lo inventa.
+		c := inventory.Costing{AllowUnknown: true}
+		if orig.Cost.Known {
+			c = inventory.Costing{Fixed: inventory.Known(orig.Cost.Value.Neg())}
+		}
+		if m, err = s.apply(ctx, r, p, loc, orig.ProductID, m, c); err != nil {
 			return err
 		}
 		out = MovementView{Movement: m, Product: v.Product, Unit: v.Unit, Location: loc}
 		return nil
 	})
 	return out, err
+}
+
+// TransferInput mueve existencia entre dos almacenes de una sucursal.
+type TransferInput struct {
+	Company, Branch string
+	From, To        string // códigos de almacén
+	Product         string // SKU, código de barras o ID
+	Quantity        string
+	Note            string
+	IdempotencyKey  string
+}
+
+// TransferView es una transferencia con sus dos patas.
+type TransferView struct {
+	inventory.Transfer
+	Out, In             inventory.Movement
+	Product             catalog.Product
+	Unit                catalog.Unit
+	Origin, Destination Location
+	// Replayed indica que la clave de idempotencia ya existía.
+	Replayed bool
+}
+
+// Transfer saca la cantidad del almacén de origen al CPP vigente y la
+// incorpora al destino con exactamente ese valor, en una sola transacción.
+// Requiere inventory.transfer.create en ambos almacenes.
+func (s *Service) Transfer(ctx context.Context, p identity.Principal, in TransferInput) (TransferView, error) {
+	note, err := inventory.ParseNote(in.Note, inventory.ReasonTransfer)
+	if err != nil {
+		return TransferView{}, err
+	}
+	key, err := checkKey(in.IdempotencyKey)
+	if err != nil {
+		return TransferView{}, err
+	}
+	if strings.TrimSpace(in.From) == "" || strings.TrimSpace(in.To) == "" {
+		return TransferView{}, fmt.Errorf("%w: indique el almacén de origen y el de destino", inventory.ErrInvalid)
+	}
+	var out TransferView
+	err = s.write(ctx, func(r Repository) error {
+		from, err := locate(ctx, r, p, WarehouseRef{Company: in.Company, Branch: in.Branch, Warehouse: in.From}, identity.PermTransferCreate)
+		if err != nil {
+			return err
+		}
+		to, err := locate(ctx, r, p, WarehouseRef{Company: in.Company, Branch: in.Branch, Warehouse: in.To}, identity.PermTransferCreate)
+		if err != nil {
+			return err
+		}
+		prod, err := appcatalog.Resolve(ctx, r, p.OrganizationID, in.Product)
+		if err != nil {
+			return err
+		}
+		unit, err := r.Unit(ctx, p.OrganizationID, prod.UnitID)
+		if err != nil {
+			return err
+		}
+		qty, err := inventory.ParseQuantity(in.Quantity, unit.Scale)
+		if err != nil {
+			return err
+		}
+		hash := digest("transfer", from.Warehouse.ID.String(), to.Warehouse.ID.String(), prod.ID.String(), qty.StringFixed(unit.Scale), note)
+		if key != "" {
+			prior, err := r.TransferByKey(ctx, p.OrganizationID, key)
+			switch {
+			case err == nil && prior.RequestHash != hash:
+				return ErrKeyReused
+			case err == nil:
+				out, err = s.transferView(ctx, r, prior)
+				out.Replayed = true
+				return err
+			case !errors.Is(err, apporg.ErrNotFound):
+				return err
+			}
+		}
+		if prod.Status != catalog.StatusActive {
+			return fmt.Errorf("%w: el producto %s está inactivo", inventory.ErrInvalid, prod.SKU)
+		}
+		for _, loc := range []Location{from, to} {
+			if loc.Warehouse.Status != org.StatusActive {
+				return fmt.Errorf("%w: el almacén %s está inactivo", inventory.ErrInvalid, loc)
+			}
+		}
+		t, err := inventory.NewTransfer(from.Warehouse.Scope(), to.Warehouse.Scope(), prod.ID, qty, note, p.UserID, s.now())
+		if err != nil {
+			return err
+		}
+		t.IdempotencyKey, t.RequestHash = key, hash
+
+		// Ambos saldos se bloquean siempre en el mismo orden: dos
+		// transferencias en sentidos opuestos no se esperan mutuamente.
+		first, second := from, to
+		if to.Warehouse.ID.String() < from.Warehouse.ID.String() {
+			first, second = to, from
+		}
+		l1, err := lockBalance(ctx, r, p.OrganizationID, first, prod.ID)
+		if err != nil {
+			return err
+		}
+		l2, err := lockBalance(ctx, r, p.OrganizationID, second, prod.ID)
+		if err != nil {
+			return err
+		}
+		src, dst := l1, l2
+		if first.Warehouse.ID != from.Warehouse.ID {
+			src, dst = l2, l1
+		}
+
+		outSt, err := s.stage(p, src, inventory.Movement{Kind: inventory.KindTransferOut, Reason: inventory.ReasonTransfer,
+			Quantity: qty.Neg(), Note: note, TransferID: t.ID, RequestHash: hash}, inventory.Costing{})
+		if err != nil {
+			return err
+		}
+		if !outSt.m.Cost.Known {
+			return fmt.Errorf("%w: la existencia de %s no está valorada; regístrele antes una entrada con costo unitario", inventory.ErrValuation, from)
+		}
+		t.Value = outSt.m.Cost.Value.Neg()
+		inSt, err := s.stage(p, dst, inventory.Movement{Kind: inventory.KindTransferIn, Reason: inventory.ReasonTransfer,
+			Quantity: qty, Note: note, TransferID: t.ID, RequestHash: hash}, inventory.Costing{Fixed: inventory.Known(t.Value)})
+		if err != nil {
+			return fmt.Errorf("almacén %s: %w", to, err)
+		}
+		if err := r.InsertTransfer(ctx, t); err != nil {
+			return err
+		}
+		if err := outSt.commit(ctx, r); err != nil {
+			return err
+		}
+		if err := inSt.commit(ctx, r); err != nil {
+			return err
+		}
+		out = TransferView{Transfer: t, Out: outSt.m, In: inSt.m, Product: prod, Unit: unit, Origin: from, Destination: to}
+		return nil
+	})
+	return out, err
+}
+
+func (s *Service) transferView(ctx context.Context, r Repository, t inventory.Transfer) (TransferView, error) {
+	v := TransferView{Transfer: t}
+	legs, err := r.TransferMovements(ctx, t.From.Organization(), t.ID)
+	if err != nil {
+		return v, err
+	}
+	for _, m := range legs {
+		switch m.Kind {
+		case inventory.KindTransferOut:
+			v.Out = m
+		case inventory.KindTransferIn:
+			v.In = m
+		}
+	}
+	if v.Origin, err = location(ctx, r, t.From); err != nil {
+		return v, err
+	}
+	if v.Destination, err = location(ctx, r, t.To); err != nil {
+		return v, err
+	}
+	if v.Product, err = r.Product(ctx, t.From.Organization(), t.ProductID); err != nil {
+		return v, err
+	}
+	v.Unit, err = r.Unit(ctx, t.From.Organization(), v.Product.UnitID)
+	return v, err
 }
 
 func (s *Service) view(ctx context.Context, r Repository, m inventory.Movement) (MovementView, error) {
@@ -528,14 +759,31 @@ type Problem struct {
 	Detail string
 }
 
-// Report es el resultado de Verify.
-type Report struct {
-	Balances, Movements int
-	Problems            []Problem
+// TransferProblem es una transferencia cuyas patas no conservan cantidad o
+// valor.
+type TransferProblem struct {
+	TransferID id.ID
+	Detail     string
 }
 
+// Report es el resultado de Verify.
+type Report struct {
+	Balances, Movements, Transfers int
+	Problems                       []Problem
+	TransferProblems               []TransferProblem
+	// Unvalued son saldos con existencia sin valor conocido (cargada antes
+	// de BP-M2-002): no es un error, pero no tienen CPP hasta que una
+	// entrada con costo los valore.
+	Unvalued []BalanceView
+}
+
+// OK indica que no hay diferencias; los saldos sin valorar son un aviso.
+func (r Report) OK() bool { return len(r.Problems) == 0 && len(r.TransferProblems) == 0 }
+
 // Verify reproduce el kardex de cada saldo de la organización y lo compara
-// con el saldo guardado. Exige ver existencias en toda la organización.
+// con el saldo guardado, y comprueba que cada transferencia saca y
+// recibe la misma cantidad y el mismo valor. Exige ver existencias en toda
+// la organización.
 func (s *Service) Verify(ctx context.Context, p identity.Principal) (Report, error) {
 	if err := p.Authorize(identity.PermStockRead, p.OrganizationScope(), "toda la organización"); err != nil {
 		return Report{}, err
@@ -546,6 +794,7 @@ func (s *Service) Verify(ctx context.Context, p identity.Principal) (Report, err
 		if err != nil {
 			return err
 		}
+		legs := map[id.ID][]inventory.Movement{}
 		for _, b := range list {
 			movements, err := r.Movements(ctx, p.OrganizationID, b.Scope.Warehouse(), b.ProductID, 0, 0)
 			if err != nil {
@@ -553,17 +802,69 @@ func (s *Service) Verify(ctx context.Context, p identity.Principal) (Report, err
 			}
 			rep.Balances++
 			rep.Movements += len(movements)
-			if err := inventory.Replay(b, movements); err != nil {
-				v, verr := s.balanceView(ctx, r, b)
-				if verr != nil {
-					return verr
+			for _, m := range movements {
+				if !m.TransferID.IsZero() {
+					legs[m.TransferID] = append(legs[m.TransferID], m)
 				}
-				rep.Problems = append(rep.Problems, Problem{BalanceView: v, Detail: err.Error()})
 			}
+			replayErr := inventory.Replay(b, movements)
+			if replayErr == nil && (b.Value.Known || b.OnHand.IsZero()) {
+				continue
+			}
+			v, err := s.balanceView(ctx, r, b)
+			if err != nil {
+				return err
+			}
+			if replayErr != nil {
+				rep.Problems = append(rep.Problems, Problem{BalanceView: v, Detail: replayErr.Error()})
+			} else {
+				rep.Unvalued = append(rep.Unvalued, v)
+			}
+		}
+		transfers, err := r.Transfers(ctx, p.OrganizationID)
+		if err != nil {
+			return err
+		}
+		for _, t := range transfers {
+			rep.Transfers++
+			if err := checkTransfer(t, legs[t.ID]); err != nil {
+				rep.TransferProblems = append(rep.TransferProblems, TransferProblem{TransferID: t.ID, Detail: err.Error()})
+			}
+			delete(legs, t.ID)
+		}
+		for tid := range legs {
+			rep.TransferProblems = append(rep.TransferProblems, TransferProblem{TransferID: tid, Detail: "movimientos de una transferencia inexistente"})
 		}
 		return nil
 	})
 	return rep, err
+}
+
+// checkTransfer exige una salida del origen y una entrada al destino por la
+// misma cantidad y el mismo valor.
+func checkTransfer(t inventory.Transfer, legs []inventory.Movement) error {
+	var out, in []inventory.Movement
+	for _, m := range legs {
+		switch {
+		case m.Kind == inventory.KindTransferOut && m.Scope == t.From && m.ProductID == t.ProductID:
+			out = append(out, m)
+		case m.Kind == inventory.KindTransferIn && m.Scope == t.To && m.ProductID == t.ProductID:
+			in = append(in, m)
+		default:
+			return fmt.Errorf("el movimiento %s no corresponde a la transferencia", m.ID)
+		}
+	}
+	if len(out) != 1 || len(in) != 1 {
+		return fmt.Errorf("se esperaba una salida y una entrada; hay %d y %d", len(out), len(in))
+	}
+	o, i := out[0], in[0]
+	if !o.Quantity.Equal(t.Quantity.Neg()) || !i.Quantity.Equal(t.Quantity) {
+		return fmt.Errorf("cantidades %s y %s para una transferencia de %s", o.Quantity, i.Quantity, t.Quantity)
+	}
+	if !o.Cost.Known || !i.Cost.Known || !o.Cost.Value.Equal(t.Value.Neg()) || !i.Cost.Value.Equal(t.Value) {
+		return fmt.Errorf("valores %s y %s para una transferencia valorada en %s", o.Cost, i.Cost, t.Value)
+	}
+	return nil
 }
 
 // FormatQuantity muestra una cantidad con los decimales de su unidad.

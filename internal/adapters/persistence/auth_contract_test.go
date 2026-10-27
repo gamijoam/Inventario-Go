@@ -235,7 +235,7 @@ func TestPermissionDeniedByScopeAndOperation(t *testing.T) {
 		e := newAuthEnv(t, cfg)
 		ctx := ctx(t)
 		root := e.login("admin", adminPassword).Principal
-		if _, err := e.org.CreateCompany(ctx, root, "norte", "Norte, C.A.", ""); err != nil {
+		if _, err := e.org.CreateCompany(ctx, root, "norte", "Norte, C.A.", "", ""); err != nil {
 			t.Fatal(err)
 		}
 		if _, err := e.org.CreateBranch(ctx, root, "norte", "maracay", "Maracay"); err != nil {
@@ -267,7 +267,7 @@ func TestPermissionDeniedByScopeAndOperation(t *testing.T) {
 		if _, err := e.org.CreateBranch(ctx, jefe, "principal", "z", "Z"); !errors.Is(err, apporg.ErrNotFound) {
 			t.Errorf("jefe de NORTE en PRINCIPAL: %v", err)
 		}
-		if _, err := e.org.CreateCompany(ctx, jefe, "sur", "Sur", ""); !errors.Is(err, identity.ErrDenied) {
+		if _, err := e.org.CreateCompany(ctx, jefe, "sur", "Sur", "", ""); !errors.Is(err, identity.ErrDenied) {
 			t.Errorf("jefe de empresa crea empresa: %v", err)
 		}
 		if list, _ := e.org.ListCompanies(ctx, cajero); len(list) != 1 {

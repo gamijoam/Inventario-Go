@@ -108,15 +108,15 @@ func TestCodesAndRIFAreUniqueWithinScope(t *testing.T) {
 		}
 		actor := admin(res.Organization.Scope())
 
-		if _, err := svc.CreateCompany(ctx(t), actor, "PRINCIPAL", "Duplicada", ""); !errors.Is(err, apporg.ErrConflict) {
+		if _, err := svc.CreateCompany(ctx(t), actor, "PRINCIPAL", "Duplicada", "", ""); !errors.Is(err, apporg.ErrConflict) {
 			t.Errorf("código repetido: %v", err)
 		}
-		if _, err := svc.CreateCompany(ctx(t), actor, "dos", "Dos", "J-12345678-9"); !errors.Is(err, apporg.ErrConflict) {
+		if _, err := svc.CreateCompany(ctx(t), actor, "dos", "Dos", "J-12345678-9", ""); !errors.Is(err, apporg.ErrConflict) {
 			t.Errorf("RIF repetido: %v", err)
 		}
 		// Varias empresas sin RIF: el índice único es parcial.
 		for _, code := range []string{"sin-rif-1", "sin-rif-2"} {
-			if _, err := svc.CreateCompany(ctx(t), actor, code, "Sin RIF", ""); err != nil {
+			if _, err := svc.CreateCompany(ctx(t), actor, code, "Sin RIF", "", ""); err != nil {
 				t.Errorf("%s: %v", code, err)
 			}
 		}
