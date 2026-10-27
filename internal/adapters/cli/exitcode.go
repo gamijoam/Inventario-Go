@@ -25,6 +25,8 @@ const (
 	// ExitUnauthenticated: no hay sesión válida, o las credenciales son
 	// incorrectas.
 	ExitUnauthenticated = 9
+	// ExitInsufficientStock: la salida dejaría el disponible en negativo.
+	ExitInsufficientStock = 10
 )
 
 // exitError asocia un error con su código de salida. Si silent es true, el
