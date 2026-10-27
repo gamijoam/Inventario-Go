@@ -16,6 +16,7 @@ import (
 	"strings"
 	"time"
 
+	appcatalog "github.com/gamijoam/inventario-go/internal/application/catalog"
 	apporg "github.com/gamijoam/inventario-go/internal/application/org"
 	"github.com/gamijoam/inventario-go/internal/domain/id"
 	"github.com/gamijoam/inventario-go/internal/domain/identity"
@@ -37,6 +38,7 @@ var (
 // comparten transacción.
 type Repository interface {
 	apporg.Repository
+	appcatalog.UnitWriter
 
 	InsertUser(ctx context.Context, u identity.User) error
 	UpdateUser(ctx context.Context, u identity.User) error
@@ -152,9 +154,9 @@ type SetupResult struct {
 	Completed bool
 }
 
-// Setup crea la estructura organizacional, las plantillas de rol y el
-// administrador inicial con ADMIN_ORG en toda la organización, en una sola
-// transacción.
+// Setup crea la estructura organizacional, las plantillas de rol, las
+// unidades de medida base y el administrador inicial con ADMIN_ORG en toda
+// la organización, en una sola transacción.
 func (s *Service) Setup(ctx context.Context, in apporg.BootstrapInput, admin AdminInput) (SetupResult, error) {
 	username, err := identity.ParseUsername(admin.Username)
 	if err != nil {
@@ -198,6 +200,9 @@ func (s *Service) Setup(ctx context.Context, in apporg.BootstrapInput, admin Adm
 		}
 		o := out.Organization
 		if out.Roles, err = s.seedRoles(ctx, r, o, now); err != nil {
+			return err
+		}
+		if err := appcatalog.SeedUnits(ctx, r, o, now); err != nil {
 			return err
 		}
 		u, err := identity.NewUser(o, username.String(), admin.DisplayName, now)

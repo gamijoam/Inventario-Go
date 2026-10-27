@@ -31,6 +31,12 @@ printf '%s\n' "$pw" | "$bin" setup --name "Panadería Ñandú" --rif J-12345678-
 printf '%s\n' "sol y luna 2026" | "$bin" user create --username cajero --name "Cajero Uno" --password-stdin --json
 "$bin" user assign --username cajero --role CAJERO --company PRINCIPAL --branch PRINCIPAL --json
 "$bin" role list
+"$bin" unit list
+"$bin" product create --name "Harina de maíz 1 kg" --barcode 7591234567894 --json
+"$bin" product create --name "Queso blanco" --sku QUE-01 --unit KG --json
+"$bin" product update P-000001 --sku HAR-1 --revision 1 --json
+"$bin" product show 07591234567894
+"$bin" product list --search harina
 # Un segundo setup debe rechazarse con el código 6 (conflicto).
 set +e; printf '%s\n' "$pw" | "$bin" setup --name Otra --password-stdin >/dev/null 2>&1; code=$?; set -e
 test "$code" -eq 6
@@ -41,6 +47,9 @@ test "$code" -eq 9
 printf '%s\n' "sol y luna 2026" | "$bin" auth login --user cajero --password-stdin
 "$bin" company list
 set +e; "$bin" warehouse create --code x --name X >/dev/null 2>&1; code=$?; set -e
+test "$code" -eq 8
+"$bin" product show QUE-01
+set +e; "$bin" product create --name X >/dev/null 2>&1; code=$?; set -e
 test "$code" -eq 8
 "$bin" doctor
 

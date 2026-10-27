@@ -43,9 +43,9 @@ Plantillas sembradas en cada organización (se pueden editar):
 | Rol | Permisos iniciales |
 |---|---|
 | `ADMIN_ORG` | Todo, salvo los permisos extraordinarios |
-| `ADMIN_EMPRESA` | Ver estructura; crear sucursales y almacenes; ver y gestionar usuarios |
-| `ENCARGADO` | Ver estructura; crear almacenes; ver usuarios |
-| `CAJERO`, `ALMACENISTA`, `OPERADOR_TECNICO` | Ver estructura (los permisos de venta e inventario llegan en M2–M4) |
+| `ADMIN_EMPRESA` | Ver estructura y catálogo; crear sucursales y almacenes; ver y gestionar usuarios |
+| `ENCARGADO` | Ver estructura y catálogo; crear almacenes; ver usuarios |
+| `CAJERO`, `ALMACENISTA`, `OPERADOR_TECNICO` | Ver estructura y catálogo (los permisos de venta e inventario llegan en M2–M4) |
 
 ```sh
 balanzapro role list

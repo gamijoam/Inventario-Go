@@ -5,7 +5,7 @@ Go, operado primero por CLI y TUI, con SQLite para una PC y PostgreSQL para
 multicaja y nube. El alcance aprobado es **V1.CLI**, entregado por hitos M0–M6
 (ver `BalanzaPro_Documento_Maestro_Go_v2.2`, sección 28).
 
-> **Estado:** M0 completo (salvo la prerelease); M1 en curso — organización, empresas, sucursales y almacenes (`BP-M1-001`); usuarios y permisos por ámbito (`BP-M1-002`). No apto para producción.
+> **Estado:** M0 completo (salvo la prerelease); M1 en curso — organización, empresas, sucursales y almacenes (`BP-M1-001`); usuarios y permisos por ámbito (`BP-M1-002`); catálogo de productos y unidades (`BP-M1-003`). No apto para producción.
 
 ## Qué contiene hoy
 
@@ -54,6 +54,8 @@ balanzapro setup --name "Bodega Ana" [--legal-name ...] [--rif J-12345678-9]   #
 balanzapro auth login|logout|whoami|passwd
 balanzapro user list|create|assign|unassign|disable|enable|unlock|reset-password
 balanzapro role list|permissions|create|edit
+balanzapro unit list|create
+balanzapro product create|list|show|update
 balanzapro org list
 balanzapro company list|create
 balanzapro branch list|create
@@ -133,6 +135,7 @@ scripts/              verificaciones de CI
 
 - [Primeros pasos](docs/user-guide/primeros-pasos.md): instalación, `setup` y estructura del negocio.
 - [Usuarios y permisos](docs/user-guide/usuarios-y-permisos.md): sesión, usuarios, roles y ámbitos.
+- [Catálogo](docs/user-guide/catalogo.md): productos, SKU, códigos de barras y unidades.
 - [Configuración](docs/user-guide/configuracion.md): archivo, variables y logs.
 - [Contribuir](CONTRIBUTING.md): ramas, commits, TDD y puerta de calidad.
 - [Decisiones técnicas (ADR)](docs/decisions/README.md).
