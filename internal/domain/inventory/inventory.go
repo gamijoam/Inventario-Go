@@ -25,7 +25,7 @@ import (
 var (
 	ErrInvalid = errors.New("dato de inventario inválido")
 	// ErrInsufficient indica que la salida dejaría el disponible en
-	// negativo. Las excepciones por política llegan en BP-M2-003.
+	// negativo sin una excepción autorizada que lo cubra.
 	ErrInsufficient = errors.New("existencia disponible insuficiente")
 	// ErrReplayMismatch indica que el saldo no coincide con su kardex.
 	ErrReplayMismatch = errors.New("el saldo no coincide con el kardex")
@@ -40,6 +40,11 @@ const (
 	KindReversal      Kind = "reversal"
 	KindTransferOut   Kind = "transfer_out"
 	KindTransferIn    Kind = "transfer_in"
+	// KindReservationOut es el despacho de unidades reservadas.
+	KindReservationOut Kind = "reservation_out"
+	// KindCountIn y KindCountOut corrigen la existencia según un conteo.
+	KindCountIn  Kind = "count_in"
+	KindCountOut Kind = "count_out"
 )
 
 // Reason es el motivo de un ajuste, de un catálogo fijo (ratificado
@@ -56,6 +61,10 @@ const (
 	ReasonReversal Reason = "reversal"
 	// ReasonTransfer es exclusivo de las dos patas de una transferencia.
 	ReasonTransfer Reason = "transfer"
+	// ReasonReservation es exclusivo del despacho de una reserva.
+	ReasonReservation Reason = "reservation"
+	// ReasonCount es exclusivo de los ajustes por conteo físico.
+	ReasonCount Reason = "count"
 )
 
 // ReasonInfo describe un motivo y en qué dirección se admite.
@@ -155,6 +164,10 @@ type Balance struct {
 	// la empresa. Desconocido solo en existencia cargada antes de BP-M2-002
 	// que ninguna entrada con costo ha valorado todavía.
 	Value Amount
+	// LastUnitCost es el último CPP válido (con existencia positiva): el
+	// costo provisional de una salida en déficit (sección 24.7). No se
+	// guarda: se deriva del kardex al leer el saldo para escribir.
+	LastUnitCost Amount
 	// Version es la secuencia del último movimiento aplicado.
 	Version   int64
 	UpdatedAt time.Time
@@ -163,6 +176,12 @@ type Balance struct {
 // Available es la existencia física no reservada ni bloqueada; puede ser
 // negativa y no se normaliza a cero (sección 24.3).
 func (b Balance) Available() decimal.Decimal { return b.OnHand.Sub(b.Reserved).Sub(b.Blocked) }
+
+// AtRisk indica que lo reservado y bloqueado ya no tiene respaldo físico,
+// p. ej. tras un conteo que encontró menos unidades (sección 24.3).
+func (b Balance) AtRisk() bool {
+	return b.Available().IsNegative() && b.Reserved.Add(b.Blocked).Sign() > 0
+}
 
 // Movement es una línea inmutable del kardex.
 type Movement struct {
@@ -189,14 +208,20 @@ type Movement struct {
 	OccurredAt      time.Time
 	ReversesID      id.ID // solo en reversos
 	TransferID      id.ID // solo en transferencias
-	IdempotencyKey  string
-	RequestHash     string
+	ReservationID   id.ID // despacho de una reserva
+	BlockID         id.ID // merma de mercancía bloqueada
+	CountID         id.ID // ajuste por conteo
+	// PolicyChangeID es la versión de la política de negativos que
+	// autorizó una salida en déficit.
+	PolicyChangeID id.ID
+	IdempotencyKey string
+	RequestHash    string
 }
 
 // Apply devuelve el saldo y el movimiento resultantes de sumar
-// m.Quantity, valorado según c. Una salida exige disponible suficiente: sin
-// política de negativos (BP-M2-003) ninguna salida deja el disponible bajo
-// cero.
+// m.Quantity, valorado según c. Una salida exige disponible suficiente,
+// salvo una excepción autorizada (c.Overdraft) o una corrección por conteo
+// (c.Correction).
 func Apply(b Balance, m Movement, c Costing, now time.Time) (Balance, Movement, error) {
 	if m.Quantity.IsZero() {
 		return Balance{}, Movement{}, fmt.Errorf("%w: cantidad cero", ErrInvalid)
@@ -204,8 +229,10 @@ func Apply(b Balance, m Movement, c Costing, now time.Time) (Balance, Movement, 
 	if m.Key != b.Key {
 		return Balance{}, Movement{}, fmt.Errorf("%w: el movimiento es de otro saldo", ErrInvalid)
 	}
-	if m.Quantity.IsNegative() && b.Available().Add(m.Quantity).IsNegative() {
-		return Balance{}, Movement{}, fmt.Errorf("%w: disponible %s, salida %s", ErrInsufficient, b.Available(), m.Quantity.Neg())
+	if m.Quantity.IsNegative() {
+		if err := checkExit(b, m.Quantity, c); err != nil {
+			return Balance{}, Movement{}, err
+		}
 	}
 	v, err := valuate(b, m.Quantity, c)
 	if err != nil {
@@ -213,6 +240,7 @@ func Apply(b Balance, m Movement, c Costing, now time.Time) (Balance, Movement, 
 	}
 	b.OnHand = b.OnHand.Add(m.Quantity)
 	b.Value = v.after
+	b.LastUnitCost = lastCost(b.OnHand, b.Value, b.LastUnitCost)
 	b.Version++
 	b.UpdatedAt = now.UTC()
 	m.Sequence = b.Version
@@ -225,7 +253,7 @@ func Apply(b Balance, m Movement, c Costing, now time.Time) (Balance, Movement, 
 // por secuencia y los compara con el saldo guardado. Detecta huecos, saltos,
 // cantidades, costos o saldos intermedios alterados y diferencias finales.
 func Replay(b Balance, movements []Movement) error {
-	onHand, value := decimal.Zero(), Amount{}
+	onHand, value, last := decimal.Zero(), Amount{}, Amount{}
 	for i, m := range movements {
 		if m.Key != b.Key {
 			return fmt.Errorf("%w: el movimiento %s es de otro saldo", ErrReplayMismatch, m.ID)
@@ -238,11 +266,12 @@ func Replay(b Balance, movements []Movement) error {
 		if !onHand.Equal(m.OnHandAfter) {
 			return fmt.Errorf("%w: tras la secuencia %d el kardex suma %s pero registra %s", ErrReplayMismatch, m.Sequence, onHand, m.OnHandAfter)
 		}
-		next, err := replayValue(before, value, m)
+		next, err := replayValue(before, value, last, m)
 		if err != nil {
 			return fmt.Errorf("%w: secuencia %d: %s", ErrReplayMismatch, m.Sequence, err)
 		}
 		value = next
+		last = lastCost(onHand, value, last)
 	}
 	if int64(len(movements)) != b.Version {
 		return fmt.Errorf("%w: el saldo está en la versión %d y el kardex tiene %d movimientos", ErrReplayMismatch, b.Version, len(movements))
@@ -254,4 +283,30 @@ func Replay(b Balance, movements []Movement) error {
 		return fmt.Errorf("%w: el kardex valora %s y el saldo registra %s", ErrReplayMismatch, value, b.Value)
 	}
 	return nil
+}
+
+// checkExit valida una salida contra el disponible. Una excepción
+// autorizada solo cubre unidades sin reservar ni bloquear y hasta su
+// límite de déficit; una corrección por conteo refleja lo que hay, aunque
+// deje lo reservado sin respaldo, pero no inventa existencia negativa.
+func checkExit(b Balance, q decimal.Decimal, c Costing) error {
+	after := b.OnHand.Add(q)
+	switch {
+	case !b.Available().Add(q).IsNegative():
+		return nil
+	case c.Correction:
+		if after.IsNegative() {
+			return fmt.Errorf("%w: la corrección dejaría la existencia en %s; vuelva a contar", ErrInsufficient, after)
+		}
+		return nil
+	case c.Overdraft.Known:
+		if b.Reserved.Sign() > 0 || b.Blocked.Sign() > 0 {
+			return fmt.Errorf("%w: disponible %s; hay unidades reservadas o bloqueadas y la excepción no las cubre", ErrInsufficient, b.Available())
+		}
+		if after.Add(c.Overdraft.Value).IsNegative() {
+			return fmt.Errorf("%w: la salida dejaría un déficit de %s y el límite es %s", ErrInsufficient, after.Neg(), c.Overdraft.Value)
+		}
+		return nil
+	}
+	return fmt.Errorf("%w: disponible %s, salida %s", ErrInsufficient, b.Available(), q.Neg())
 }

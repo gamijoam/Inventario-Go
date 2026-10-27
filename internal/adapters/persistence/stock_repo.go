@@ -136,7 +136,51 @@ func (r *orgRepo) BalanceForUpdate(ctx context.Context, orgID, warehouseID, prod
 		q += " FOR UPDATE"
 	}
 	b, err := scanBalance(r.tx.QueryRowContext(ctx, r.q(q), orgID.String(), warehouseID.String(), productID.String()))
-	return b, notFound(err, "saldo")
+	if err != nil {
+		return b, notFound(err, "saldo")
+	}
+	b.LastUnitCost, err = r.lastUnitCost(ctx, orgID, warehouseID, productID)
+	return b, err
+}
+
+// lastUnitCost deriva el último CPP válido del kardex: el del movimiento
+// más reciente que dejó existencia positiva valorada.
+func (r *orgRepo) lastUnitCost(ctx context.Context, orgID, warehouseID, productID id.ID) (inventory.Amount, error) {
+	var onHand, value string
+	err := r.tx.QueryRowContext(ctx, r.q("SELECT CAST(on_hand_after AS TEXT), CAST(value_after AS TEXT) FROM inventory_movements "+
+		"WHERE organization_id = ? AND warehouse_id = ? AND product_id = ? AND value_after IS NOT NULL AND CAST(on_hand_after AS REAL) > 0 "+
+		"ORDER BY sequence DESC LIMIT 1"), orgID.String(), warehouseID.String(), productID.String()).Scan(&onHand, &value)
+	if errors.Is(err, sql.ErrNoRows) {
+		return inventory.Amount{}, nil
+	}
+	if err != nil {
+		return inventory.Amount{}, err
+	}
+	q, err := parseDec(onHand)
+	if err != nil {
+		return inventory.Amount{}, err
+	}
+	v, err := parseDec(value)
+	if err != nil {
+		return inventory.Amount{}, err
+	}
+	return inventory.LastValidCost(q, inventory.Known(v)), nil
+}
+
+// UpdateCommitments cambia lo reservado y bloqueado sin avanzar la versión.
+func (r *orgRepo) UpdateCommitments(ctx context.Context, b inventory.Balance) error {
+	res, err := r.tx.ExecContext(ctx, r.q(
+		"UPDATE inventory_balances SET reserved = ?, blocked = ?, updated_at_utc = ? WHERE organization_id = ? AND warehouse_id = ? AND product_id = ? AND version = ?"),
+		dec(b.Reserved), dec(b.Blocked), r.ts(b.UpdatedAt), b.Scope.Organization().String(), b.Scope.Warehouse().String(), b.ProductID.String(), b.Version)
+	if err != nil {
+		return fmt.Errorf("guardar saldo: %w", err)
+	}
+	if n, err := res.RowsAffected(); err != nil {
+		return err
+	} else if n != 1 {
+		return stock.ErrConcurrent
+	}
+	return nil
 }
 
 func (r *orgRepo) Balances(ctx context.Context, orgID, warehouseID, productID id.ID) ([]inventory.Balance, error) {
@@ -161,11 +205,12 @@ func (r *orgRepo) InsertMovement(ctx context.Context, m inventory.Movement) erro
 	sc := m.Scope
 	_, err := r.tx.ExecContext(ctx, r.q(
 		"INSERT INTO inventory_movements (organization_id, id, company_id, branch_id, warehouse_id, product_id, sequence, kind, reason, quantity, on_hand_after, note, actor_id, occurred_at_utc, reverses_id, idempotency_key, request_hash, "+
-			"unit_cost, cost, value_adjustment, value_after, transfer_id) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)"),
+			"unit_cost, cost, value_adjustment, value_after, transfer_id, reservation_id, block_id, count_id, policy_change_id) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)"),
 		sc.Organization().String(), m.ID.String(), sc.Company().String(), sc.Branch().String(), sc.Warehouse().String(), m.ProductID.String(),
 		m.Sequence, string(m.Kind), string(m.Reason), dec(m.Quantity), dec(m.OnHandAfter), m.Note, m.ActorID.String(), r.ts(m.OccurredAt),
 		nullID(m.ReversesID), nullString(m.IdempotencyKey), m.RequestHash,
-		amount(m.UnitCost), amount(m.Cost), dec(m.ValueAdjustment), amount(m.ValueAfter), nullID(m.TransferID))
+		amount(m.UnitCost), amount(m.Cost), dec(m.ValueAdjustment), amount(m.ValueAfter), nullID(m.TransferID),
+		nullID(m.ReservationID), nullID(m.BlockID), nullID(m.CountID), nullID(m.PolicyChangeID))
 	if r.s.isUniqueViolation(err) {
 		// Otro proceso usó la misma clave o revirtió el mismo movimiento:
 		// al reintentar se encontrará su resultado.
@@ -179,18 +224,19 @@ func (r *orgRepo) InsertMovement(ctx context.Context, m inventory.Movement) erro
 
 const movementCols = "CAST(organization_id AS TEXT), CAST(id AS TEXT), CAST(company_id AS TEXT), CAST(branch_id AS TEXT), CAST(warehouse_id AS TEXT), CAST(product_id AS TEXT), " +
 	"sequence, kind, reason, CAST(quantity AS TEXT), CAST(on_hand_after AS TEXT), note, CAST(actor_id AS TEXT), occurred_at_utc, CAST(reverses_id AS TEXT), idempotency_key, request_hash, " +
-	"CAST(unit_cost AS TEXT), CAST(cost AS TEXT), CAST(value_adjustment AS TEXT), CAST(value_after AS TEXT), CAST(transfer_id AS TEXT)"
+	"CAST(unit_cost AS TEXT), CAST(cost AS TEXT), CAST(value_adjustment AS TEXT), CAST(value_after AS TEXT), CAST(transfer_id AS TEXT), " +
+	"CAST(reservation_id AS TEXT), CAST(block_id AS TEXT), CAST(count_id AS TEXT), CAST(policy_change_id AS TEXT)"
 
 func scanMovement(sc scanner) (inventory.Movement, error) {
 	var o, mid, c, br, w, p, kind, reason, qty, after, actor, adjustment string
-	var reverses, key, unitCost, cost, valueAfter, transfer sql.NullString
+	var reverses, key, unitCost, cost, valueAfter, transfer, reservation, block, count, policy sql.NullString
 	var occurred any
 	var m inventory.Movement
 	if err := sc.Scan(&o, &mid, &c, &br, &w, &p, &m.Sequence, &kind, &reason, &qty, &after, &m.Note, &actor, &occurred, &reverses, &key, &m.RequestHash,
-		&unitCost, &cost, &adjustment, &valueAfter, &transfer); err != nil {
+		&unitCost, &cost, &adjustment, &valueAfter, &transfer, &reservation, &block, &count, &policy); err != nil {
 		return m, err
 	}
-	ids, err := parseIDs(o, mid, c, br, w, p, actor, reverses.String, transfer.String)
+	ids, err := parseIDs(o, mid, c, br, w, p, actor, reverses.String, transfer.String, reservation.String, block.String, count.String, policy.String)
 	if err != nil {
 		return m, err
 	}
@@ -198,6 +244,7 @@ func scanMovement(sc scanner) (inventory.Movement, error) {
 		return m, err
 	}
 	m.ID, m.ProductID, m.ActorID, m.ReversesID, m.TransferID = ids[1], ids[5], ids[6], ids[7], ids[8]
+	m.ReservationID, m.BlockID, m.CountID, m.PolicyChangeID = ids[9], ids[10], ids[11], ids[12]
 	if m.UnitCost, err = parseAmount(unitCost); err != nil {
 		return m, err
 	}
