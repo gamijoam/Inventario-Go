@@ -5,7 +5,7 @@ Go, operado primero por CLI y TUI, con SQLite para una PC y PostgreSQL para
 multicaja y nube. El alcance aprobado es **V1.CLI**, entregado por hitos M0–M6
 (ver `BalanzaPro_Documento_Maestro_Go_v2.2`, sección 28).
 
-> **Estado:** M0 completo (salvo la prerelease), M1 y M2 completos; M3 en curso — compras, recepciones y gastos (`BP-M3-001`); tasas de cambio versionadas y compras en otra moneda (`BP-M3-002`). M1: organización, empresas, sucursales y almacenes (`BP-M1-001`); usuarios y permisos por ámbito (`BP-M1-002`); catálogo de productos y unidades (`BP-M1-003`). M2: existencias y kardex (`BP-M2-001`); costo promedio por almacén y transferencias (`BP-M2-002`); reservas, bloqueos, conteos y existencia negativa por política (`BP-M2-003`). No apto para producción.
+> **Estado:** M0 completo (salvo la prerelease), M1 y M2 completos; M3 completo — compras, recepciones y gastos (`BP-M3-001`); tasas de cambio versionadas y compras en otra moneda (`BP-M3-002`); listas de precios y sugerencias aprobadas (`BP-M3-003`). M1: organización, empresas, sucursales y almacenes (`BP-M1-001`); usuarios y permisos por ámbito (`BP-M1-002`); catálogo de productos y unidades (`BP-M1-003`). M2: existencias y kardex (`BP-M2-001`); costo promedio por almacén y transferencias (`BP-M2-002`); reservas, bloqueos, conteos y existencia negativa por política (`BP-M2-003`). No apto para producción.
 
 ## Qué contiene hoy
 
@@ -60,6 +60,8 @@ balanzapro inventory in|out|reverse|transfer|stock|kardex|verify|reasons
 balanzapro inventory reservation|block|count|policy ...
 balanzapro purchase supplier|order|receipt|cost ...
 balanzapro rate set|show|list
+balanzapro price-list create|list|margin
+balanzapro price show|propose|approve|reject|proposal|proposals|cancel
 balanzapro org list
 balanzapro company list|create
 balanzapro branch list|create
@@ -144,6 +146,7 @@ scripts/              verificaciones de CI
 - [Inventario](docs/user-guide/inventario.md): existencias, ajustes, reversos, kardex, costo promedio, transferencias, reservas, bloqueos, conteos y existencia negativa.
 - [Compras](docs/user-guide/compras.md): proveedores, órdenes, recepciones, gastos atribuibles y costos.
 - [Tasas de cambio](docs/user-guide/tasas.md): registro, vigencia, correcciones y compras en otra moneda.
+- [Listas y precios](docs/user-guide/precios.md): márgenes, sugerencias al recibir, aprobación y precios programados.
 - [Configuración](docs/user-guide/configuracion.md): archivo, variables y logs.
 - [Contribuir](CONTRIBUTING.md): ramas, commits, TDD y puerta de calidad.
 - [Decisiones técnicas (ADR)](docs/decisions/README.md).

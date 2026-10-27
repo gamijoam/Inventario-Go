@@ -24,6 +24,7 @@ import (
 
 	appcatalog "github.com/gamijoam/inventario-go/internal/application/catalog"
 	apporg "github.com/gamijoam/inventario-go/internal/application/org"
+	apppricing "github.com/gamijoam/inventario-go/internal/application/pricing"
 	"github.com/gamijoam/inventario-go/internal/application/rates"
 	"github.com/gamijoam/inventario-go/internal/application/stock"
 	"github.com/gamijoam/inventario-go/internal/domain/catalog"
@@ -44,6 +45,7 @@ import (
 type Repository interface {
 	stock.Repository
 	rates.Repository
+	apppricing.Repository
 
 	InsertSupplier(ctx context.Context, s purchase.Supplier) error
 	Supplier(ctx context.Context, orgID, supplierID id.ID) (purchase.Supplier, error)
@@ -84,14 +86,7 @@ type Repository interface {
 }
 
 // LastPurchase es el último costo de compra de un producto.
-type LastPurchase struct {
-	UnitCost   decimal.Decimal // costo de compra en la moneda del documento, sin gastos
-	Currency   money.Currency  // del documento
-	ValuedUnit decimal.Decimal // costo de compra en la moneda de valoración
-	TotalUnit  decimal.Decimal // en la moneda de valoración, con gastos capitalizados al recibir
-	Receipt    string
-	ReceivedAt time.Time
-}
+type LastPurchase = purchase.LastPurchase
 
 type Store interface {
 	InTx(ctx context.Context, fn func(Repository) error) error
@@ -438,6 +433,10 @@ type ReceiptView struct {
 	Products  map[id.ID]LineView
 	Movements []inventory.Movement // entradas y revaloraciones registradas por esta operación
 	Replayed  bool
+	// Suggestions son las propuestas de precio que generó la confirmación
+	// (DEC-007.P2); Skipped, las que no pudo generar y por qué.
+	Suggestions []apppricing.ProposalView
+	Skipped     []apppricing.Skipped
 }
 
 func (s *Service) receiptView(ctx context.Context, r Repository, rc purchase.Receipt) (ReceiptView, error) {
@@ -478,7 +477,12 @@ func (s *Service) receiptView(ctx context.Context, r Repository, rc purchase.Rec
 	for i, l := range rc.Lines {
 		ids[i] = l.ProductID
 	}
-	v.Products, err = products(ctx, r, orgID, ids)
+	if v.Products, err = products(ctx, r, orgID, ids); err != nil {
+		return v, err
+	}
+	if rc.Status == purchase.ReceiptConfirmed {
+		v.Suggestions, err = apppricing.SuggestionsOf(ctx, r, orgID, rc.ID)
+	}
 	return v, err
 }
 
@@ -844,10 +848,19 @@ func (s *Service) ConfirmReceipt(ctx context.Context, p identity.Principal, ref 
 		if err := r.UpdateReceipt(ctx, rc); err != nil {
 			return err
 		}
+		// Precios: solo propuestas; la recepción no depende de ellas.
+		productIDs := make([]id.ID, len(rc.Lines))
+		for i, l := range rc.Lines {
+			productIDs[i] = l.ProductID
+		}
+		_, skipped, err := apppricing.SuggestWithin(ctx, r, p.UserID, loc.Company, rc.ID, productIDs, now)
+		if err != nil {
+			return err
+		}
 		if out, err = s.receiptView(ctx, r, rc); err != nil {
 			return err
 		}
-		out.Movements = moves
+		out.Movements, out.Skipped = moves, skipped
 		return nil
 	})
 	return out, err

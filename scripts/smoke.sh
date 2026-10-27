@@ -95,6 +95,16 @@ test "$code" -eq 6
 "$bin" rate list
 "$bin" purchase receipt confirm RC-000002
 "$bin" purchase receipt show RC-000002
+# Listas y precios (BP-M3-003): la recepción solo propone; aprobar publica.
+"$bin" price-list create --code general --name General --margin 25 --json
+"$bin" price propose --list general --product HAR-1 --price 1.80
+"$bin" price approve PP-000001
+"$bin" purchase receipt create --warehouse principal --supplier dist --json
+"$bin" purchase receipt line RC-000003 --product HAR-1 --qty 10 --unit-cost 1.5
+"$bin" purchase receipt confirm RC-000003
+"$bin" price show --product HAR-1
+"$bin" price approve PP-000002 --at "2099-01-01 08:00"
+"$bin" price proposals --json
 "$bin" inventory verify
 # Un segundo setup debe rechazarse con el código 6 (conflicto).
 set +e; printf '%s\n' "$pw" | "$bin" setup --name Otra --password-stdin >/dev/null 2>&1; code=$?; set -e

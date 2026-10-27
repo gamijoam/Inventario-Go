@@ -179,6 +179,15 @@ type receiptJSON struct {
 	Expenses  []expenseJSON     `json:"expenses"`
 	Movements []movementJSON    `json:"movements"`
 	Replayed  bool              `json:"replayed"`
+	// Propuestas de precio que dejó la confirmación (DEC-007.P2).
+	Suggestions []proposalJSON `json:"price_suggestions"`
+	Skipped     []skippedJSON  `json:"price_skipped"`
+}
+
+type skippedJSON struct {
+	List   string `json:"list_code"`
+	SKU    string `json:"sku"`
+	Reason string `json:"reason"`
 }
 
 func toReceiptJSON(v purchasing.ReceiptView) receiptJSON {
@@ -187,7 +196,13 @@ func toReceiptJSON(v purchasing.ReceiptView) receiptJSON {
 		Date: v.DocumentDate.Format(timezone.DateLayout), Rate: optionalRate(v.Rates, v.RateID), Supplier: v.Supplier.Code.String(),
 		Status: string(v.Status), Document: v.SupplierDocument, Note: v.Note, CreatedBy: v.CreatedBy.String(), CreatedAt: rfc3339(v.CreatedAt),
 		ClosedBy: optionalID(v.ClosedBy), ClosedAt: optionalTime(v.ClosedAt), Lines: []receiptLineJSON{}, Expenses: []expenseJSON{},
-		Movements: []movementJSON{}, Replayed: v.Replayed}
+		Movements: []movementJSON{}, Replayed: v.Replayed, Suggestions: []proposalJSON{}, Skipped: []skippedJSON{}}
+	for _, x := range v.Suggestions {
+		j.Suggestions = append(j.Suggestions, toProposalJSON(x))
+	}
+	for _, x := range v.Skipped {
+		j.Skipped = append(j.Skipped, skippedJSON{x.List.Code.String(), x.Product.SKU.String(), x.Reason})
+	}
 	if v.Order != "" {
 		o := v.Order
 		j.Order = &o
@@ -298,6 +313,12 @@ func writeReceipt(cmd *cobra.Command, flags *globalFlags, v purchasing.ReceiptVi
 	}
 	if n := len(v.Movements); n > 0 {
 		fmt.Fprintf(out, "%d movimientos registrados en el kardex\n", n)
+	}
+	for _, x := range v.Suggestions {
+		fmt.Fprintf(out, "  precio sugerido %s en %s para %s: %s; %s\n", x.Number, x.List.Code, x.Product.SKU, change(x.Current, x.Price, x.List.Currency.Code()), proposalText[x.Status])
+	}
+	for _, x := range v.Skipped {
+		fmt.Fprintf(out, "  sin precio sugerido en %s para %s: %s\n", x.List.Code, x.Product.SKU, x.Reason)
 	}
 	return nil
 }

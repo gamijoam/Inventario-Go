@@ -105,6 +105,10 @@ const (
 	PermReplacementCost Permission = "purchase.replacement_cost.manage"
 	PermRateRead        Permission = "currency.rate.read"
 	PermRateManage      Permission = "currency.rate.manage"
+	PermPriceRead       Permission = "pricing.price.read"
+	PermPriceListManage Permission = "pricing.list.manage"
+	PermPricePropose    Permission = "pricing.price.propose"
+	PermPriceApprove    Permission = "pricing.price.approve"
 	// Extraordinarios: nunca forman parte de una plantilla (sección 26.3).
 	PermApproveBelowCost Permission = "pricing.override.approve_below_cost"
 	PermBackupRestore    Permission = "system.backup.restore"
@@ -143,7 +147,11 @@ var catalog = []PermissionInfo{
 	{PermReplacementCost, "Registrar el costo de reposición estimado de los productos", false},
 	{PermRateRead, "Ver las tasas de cambio de la empresa", false},
 	{PermRateManage, "Registrar tasas de cambio con su fuente", false},
-	{PermApproveBelowCost, "Aprobar ventas por debajo del costo (DEC-007.B2, nivel N2; uso en M4)", true},
+	{PermPriceRead, "Ver listas, precios vigentes y propuestas de precio", false},
+	{PermPriceListManage, "Crear listas de precios y fijar márgenes objetivo (con ámbito de empresa)", false},
+	{PermPricePropose, "Proponer cambios de precio", false},
+	{PermPriceApprove, "Aprobar, rechazar y anular cambios de precio (con ámbito de empresa)", false},
+	{PermApproveBelowCost, "Aprobar precios por debajo del costo de referencia; en M4, también ventas bajo costo (DEC-007.B2, nivel N2)", true},
 	{PermBackupRestore, "Restaurar respaldos (uso en M5)", true},
 	{PermNegativeOverride, "Registrar salidas que dejan existencia negativa, dentro de la política y su límite (DEC-007.F2)", true},
 }
@@ -256,13 +264,15 @@ func Templates() []RoleTemplate {
 		{AdminRoleCode, "Administrador de organización", admin},
 		{"ADMIN_EMPRESA", "Administrador de empresa", []Permission{PermOrgRead, PermBranchCreate, PermWarehouseCreate, PermUserRead, PermUserManage, PermProductRead, PermStockRead, PermStockAdjust, PermTransferCreate,
 			PermReservation, PermBlock, PermCountManage, PermCountApprove, PermPolicyManage,
-			PermPurchaseRead, PermPurchaseManage, PermReceiptConfirm, PermReplacementCost, PermRateRead, PermRateManage}},
+			PermPurchaseRead, PermPurchaseManage, PermReceiptConfirm, PermReplacementCost, PermRateRead, PermRateManage,
+			PermPriceRead, PermPriceListManage, PermPricePropose, PermPriceApprove}},
 		{"ENCARGADO", "Encargado", []Permission{PermOrgRead, PermWarehouseCreate, PermUserRead, PermProductRead, PermStockRead, PermStockAdjust, PermTransferCreate,
 			PermReservation, PermBlock, PermCountManage, PermCountApprove,
-			PermPurchaseRead, PermPurchaseManage, PermReceiptConfirm, PermReplacementCost, PermRateRead, PermRateManage}},
-		{"CAJERO", "Cajero", []Permission{PermOrgRead, PermProductRead, PermStockRead, PermReservation, PermRateRead}},
+			PermPurchaseRead, PermPurchaseManage, PermReceiptConfirm, PermReplacementCost, PermRateRead, PermRateManage,
+			PermPriceRead, PermPricePropose, PermPriceApprove}},
+		{"CAJERO", "Cajero", []Permission{PermOrgRead, PermProductRead, PermStockRead, PermReservation, PermRateRead, PermPriceRead}},
 		{"ALMACENISTA", "Almacenista", []Permission{PermOrgRead, PermProductRead, PermStockRead, PermStockAdjust, PermTransferCreate,
-			PermReservation, PermBlock, PermCountManage, PermPurchaseRead, PermPurchaseManage, PermRateRead}},
+			PermReservation, PermBlock, PermCountManage, PermPurchaseRead, PermPurchaseManage, PermRateRead, PermPriceRead, PermPricePropose}},
 		{"OPERADOR_TECNICO", "Operador técnico", []Permission{PermOrgRead, PermProductRead, PermStockRead}},
 	}
 }
