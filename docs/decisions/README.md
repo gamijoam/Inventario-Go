@@ -18,5 +18,6 @@ registran cómo se implementan.
 | [0010](0010-existencias-y-kardex.md) | Existencias y kardex inmutable | Aceptada |
 | [0011](0011-costo-promedio-y-transferencias.md) | Costo promedio ponderado por almacén y transferencias | Aceptada |
 | [0012](0012-reservas-bloqueos-conteos-y-negativos.md) | Reservas, bloqueos, conteos y existencia negativa por política | Aceptada |
+| [0013](0013-compras-recepciones-y-gastos.md) | Compras, recepciones, gastos atribuibles y costo de reposición | Aceptada |
 
 Estados posibles: *Propuesta*, *Aceptada*, *Reemplazada por ADR-xxxx*, *Rechazada*.

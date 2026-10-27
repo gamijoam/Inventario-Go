@@ -74,6 +74,17 @@ test "$code" -eq 2
 set +e; "$bin" inventory out --warehouse principal --product HAR-1 --qty 100 --reason correction --allow-negative >/dev/null 2>&1; code=$?; set -e
 test "$code" -eq 8
 "$bin" inventory verify
+# Compras (BP-M3-001): proveedor, orden, recepción con gasto y costos.
+"$bin" purchase supplier create --code dist --name "Distribuidora, C.A." --rif J-87654321-0 --json
+"$bin" purchase order create --supplier dist --line HAR-1:20:1.30 --json
+"$bin" purchase receipt create --warehouse principal --order OC-000001 --document FAC-1 --json
+"$bin" purchase receipt expense RC-000001 --concept Flete --amount 2
+"$bin" purchase receipt confirm RC-000001
+"$bin" purchase receipt confirm RC-000001   # idempotente
+"$bin" purchase order show OC-000001
+"$bin" purchase cost set-replacement --product HAR-1 --unit-cost 1.40 --note cotización
+"$bin" purchase cost show --product HAR-1
+"$bin" inventory verify
 # Un segundo setup debe rechazarse con el código 6 (conflicto).
 set +e; printf '%s\n' "$pw" | "$bin" setup --name Otra --password-stdin >/dev/null 2>&1; code=$?; set -e
 test "$code" -eq 6
