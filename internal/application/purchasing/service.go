@@ -7,6 +7,11 @@
 // cierra el documento y avanza la orden: el CPP cambia ahí. El precio de
 // venta no se toca, y el costo de reposición es una estimación aparte que
 // nunca sobrescribe el CPP (sección 19.3).
+//
+// Los documentos van en su moneda (BP-M3-002). Al confirmar, cada línea se
+// convierte a la moneda de valoración de la empresa con la tasa vigente a
+// la fecha del documento; un gasto se convierte al registrarse con la de
+// su propia fecha. Sin tasa vigente la operación se rechaza.
 package purchasing
 
 import (
@@ -19,21 +24,26 @@ import (
 
 	appcatalog "github.com/gamijoam/inventario-go/internal/application/catalog"
 	apporg "github.com/gamijoam/inventario-go/internal/application/org"
+	"github.com/gamijoam/inventario-go/internal/application/rates"
 	"github.com/gamijoam/inventario-go/internal/application/stock"
 	"github.com/gamijoam/inventario-go/internal/domain/catalog"
 	"github.com/gamijoam/inventario-go/internal/domain/decimal"
+	"github.com/gamijoam/inventario-go/internal/domain/exchange"
 	"github.com/gamijoam/inventario-go/internal/domain/id"
 	"github.com/gamijoam/inventario-go/internal/domain/identity"
 	"github.com/gamijoam/inventario-go/internal/domain/inventory"
+	"github.com/gamijoam/inventario-go/internal/domain/money"
 	"github.com/gamijoam/inventario-go/internal/domain/org"
 	"github.com/gamijoam/inventario-go/internal/domain/purchase"
 	"github.com/gamijoam/inventario-go/internal/domain/scope"
+	"github.com/gamijoam/inventario-go/internal/domain/timezone"
 )
 
-// Repository amplía el de existencias con los documentos de compra; todo
-// comparte la transacción.
+// Repository amplía el de existencias con los documentos de compra y las
+// tasas; todo comparte la transacción.
 type Repository interface {
 	stock.Repository
+	rates.Repository
 
 	InsertSupplier(ctx context.Context, s purchase.Supplier) error
 	Supplier(ctx context.Context, orgID, supplierID id.ID) (purchase.Supplier, error)
@@ -75,8 +85,10 @@ type Repository interface {
 
 // LastPurchase es el último costo de compra de un producto.
 type LastPurchase struct {
-	UnitCost   decimal.Decimal // costo de compra, sin gastos
-	TotalUnit  decimal.Decimal // con gastos capitalizados al recibir
+	UnitCost   decimal.Decimal // costo de compra en la moneda del documento, sin gastos
+	Currency   money.Currency  // del documento
+	ValuedUnit decimal.Decimal // costo de compra en la moneda de valoración
+	TotalUnit  decimal.Decimal // en la moneda de valoración, con gastos capitalizados al recibir
 	Receipt    string
 	ReceivedAt time.Time
 }
@@ -166,6 +178,7 @@ type LineInput struct {
 type OrderInput struct {
 	Company, Branch string
 	Supplier        string // código
+	Currency        string // de los costos; vacía es la de valoración
 	Lines           []LineInput
 	Note            string
 }
@@ -260,6 +273,10 @@ func (s *Service) CreateOrder(ctx context.Context, p identity.Principal, in Orde
 		if err != nil {
 			return err
 		}
+		cur, err := currencyOr(in.Currency, c.Currency)
+		if err != nil {
+			return err
+		}
 		lines := make([]purchase.OrderLine, 0, len(in.Lines))
 		for _, l := range in.Lines {
 			prod, qty, cost, err := line(ctx, r, p.OrganizationID, l)
@@ -272,7 +289,7 @@ func (s *Service) CreateOrder(ctx context.Context, p identity.Principal, in Orde
 		if err != nil {
 			return err
 		}
-		o, err := purchase.NewOrder(b.Scope(), fmt.Sprintf("OC-%06d", n), sup.ID, lines, in.Note, p.UserID, s.now())
+		o, err := purchase.NewOrder(b.Scope(), fmt.Sprintf("OC-%06d", n), sup.ID, cur, lines, in.Note, p.UserID, s.now())
 		if err != nil {
 			return err
 		}
@@ -403,6 +420,8 @@ type ReceiptInput struct {
 	Where    stock.WarehouseRef
 	Supplier string // código; con Order, por defecto el de la orden
 	Order    string // número o ID, opcional
+	Currency string // vacía: la de la orden o la de valoración
+	Date     string // de la factura, AAAA-MM-DD; vacía es hoy
 	Document string // número de factura o guía del proveedor
 	Note     string
 }
@@ -412,8 +431,10 @@ type ReceiptView struct {
 	purchase.Receipt
 	Supplier  purchase.Supplier
 	Location  stock.Location
-	Order     string // número de la orden, si la hay
+	Valuation money.Currency // de la empresa
+	Order     string         // número de la orden, si la hay
 	Expenses  []purchase.Expense
+	Rates     map[id.ID]exchange.Rate // aplicadas por la recepción y sus gastos
 	Products  map[id.ID]LineView
 	Movements []inventory.Movement // entradas y revaloraciones registradas por esta operación
 	Replayed  bool
@@ -429,6 +450,7 @@ func (s *Service) receiptView(ctx context.Context, r Repository, rc purchase.Rec
 	if v.Location, err = stock.LocationOf(ctx, r, rc.Scope); err != nil {
 		return v, err
 	}
+	v.Valuation = v.Location.Company.Currency
 	if !rc.OrderID.IsZero() {
 		o, err := r.Order(ctx, orgID, rc.OrderID, false)
 		if err != nil {
@@ -438,6 +460,19 @@ func (s *Service) receiptView(ctx context.Context, r Repository, rc purchase.Rec
 	}
 	if v.Expenses, err = r.Expenses(ctx, orgID, rc.ID); err != nil {
 		return v, err
+	}
+	v.Rates = map[id.ID]exchange.Rate{}
+	rateIDs := []id.ID{rc.RateID}
+	for _, e := range v.Expenses {
+		rateIDs = append(rateIDs, e.RateID)
+	}
+	for _, rid := range rateIDs {
+		if _, ok := v.Rates[rid]; ok || rid.IsZero() {
+			continue
+		}
+		if v.Rates[rid], err = r.Rate(ctx, orgID, rid); err != nil {
+			return v, err
+		}
 	}
 	ids := make([]id.ID, len(rc.Lines))
 	for i, l := range rc.Lines {
@@ -483,11 +518,29 @@ func (s *Service) CreateReceipt(ctx context.Context, p identity.Principal, in Re
 		if supID.IsZero() {
 			return fmt.Errorf("%w: indique el proveedor o la orden", purchase.ErrInvalid)
 		}
+		cur := loc.Company.Currency
+		if !o.ID.IsZero() {
+			cur = o.Currency
+		}
+		if strings.TrimSpace(in.Currency) != "" {
+			given, err := rates.ParseCurrency(in.Currency)
+			if err != nil {
+				return err
+			}
+			if !o.ID.IsZero() && given != o.Currency {
+				return fmt.Errorf("%w: la orden %s está en %s", purchase.ErrInvalid, o.Number, o.Currency)
+			}
+			cur = given
+		}
+		date, err := dateOr(in.Date, s.now())
+		if err != nil {
+			return err
+		}
 		n, err := r.NextCounter(ctx, p.OrganizationID, "purchase_receipt")
 		if err != nil {
 			return err
 		}
-		rc, err := purchase.NewReceipt(loc.Warehouse.Scope(), fmt.Sprintf("RC-%06d", n), supID, o.ID, in.Document, in.Note, p.UserID, s.now())
+		rc, err := purchase.NewReceipt(loc.Warehouse.Scope(), fmt.Sprintf("RC-%06d", n), supID, o.ID, cur, date, in.Document, in.Note, p.UserID, s.now())
 		if err != nil {
 			return err
 		}
@@ -589,12 +642,16 @@ func (s *Service) editDraft(ctx context.Context, p identity.Principal, ref strin
 // parte de unidades que siguen en el almacén revaloriza el inventario y la
 // de unidades que ya salieron queda como diferencia de costo, sin tocar
 // ventas cerradas (sección 19.3). El gasto tardío exige confirmar compras.
-func (s *Service) AddExpense(ctx context.Context, p identity.Principal, ref, concept, amount, criterion string) (ReceiptView, error) {
-	a, err := purchase.ParseAmount(amount)
+//
+// El gasto va en su moneda y se convierte ya, con la tasa vigente a su
+// fecha: por defecto la del documento en un borrador y hoy en un gasto
+// tardío.
+func (s *Service) AddExpense(ctx context.Context, p identity.Principal, ref string, in ExpenseInput) (ReceiptView, error) {
+	a, err := purchase.ParseAmount(in.Amount)
 	if err != nil {
 		return ReceiptView{}, err
 	}
-	c, err := purchase.ParseCriterion(criterion)
+	c, err := purchase.ParseCriterion(in.Criterion)
 	if err != nil {
 		return ReceiptView{}, err
 	}
@@ -604,7 +661,27 @@ func (s *Service) AddExpense(ctx context.Context, p identity.Principal, ref, con
 		if err != nil {
 			return err
 		}
-		e, err := purchase.NewExpense(rc, concept, a, c, p.UserID, s.now())
+		now := s.now()
+		cur := rc.Currency
+		if strings.TrimSpace(in.Currency) != "" {
+			if cur, err = rates.ParseCurrency(in.Currency); err != nil {
+				return err
+			}
+		}
+		date := rc.DocumentDate
+		if rc.Status == purchase.ReceiptConfirmed {
+			date = timezone.DateOf(now)
+		}
+		if strings.TrimSpace(in.Date) != "" {
+			if date, err = rates.ParseDate(in.Date); err != nil {
+				return err
+			}
+		}
+		rate, err := rateFor(ctx, r, loc.Company, cur, date)
+		if err != nil {
+			return err
+		}
+		e, err := purchase.NewExpense(rc, in.Concept, a, cur, date, c, loc.Company.Currency, rate, p.UserID, now)
 		if err != nil {
 			return err
 		}
@@ -613,7 +690,7 @@ func (s *Service) AddExpense(ctx context.Context, p identity.Principal, ref, con
 			if err := p.Authorize(identity.PermReceiptConfirm, loc.Warehouse.Scope(), "el almacén "+loc.String()); err != nil {
 				return err
 			}
-			if e.Allocations, err = purchase.Allocate(rc.Lines, e.Amount, e.Criterion); err != nil {
+			if e.Allocations, err = purchase.Allocate(rc.Lines, e.Valued, e.Criterion); err != nil {
 				return err
 			}
 			if moves, err = s.lateAllocations(ctx, r, p, loc, rc, &e); err != nil {
@@ -696,12 +773,19 @@ func (s *Service) ConfirmReceipt(ctx context.Context, p identity.Principal, ref 
 		if loc.Warehouse.Status != org.StatusActive {
 			return fmt.Errorf("%w: el almacén %s está inactivo", purchase.ErrInvalid, loc)
 		}
+		rate, err := rateFor(ctx, r, loc.Company, rc.Currency, rc.DocumentDate)
+		if err != nil {
+			return err
+		}
+		if rc, err = rc.Valuate(loc.Company.Currency, rate); err != nil {
+			return err
+		}
 		expenses, err := r.Expenses(ctx, p.OrganizationID, rc.ID)
 		if err != nil {
 			return err
 		}
 		for i := range expenses {
-			if expenses[i].Allocations, err = purchase.Allocate(rc.Lines, expenses[i].Amount, expenses[i].Criterion); err != nil {
+			if expenses[i].Allocations, err = purchase.Allocate(rc.Lines, expenses[i].Valued, expenses[i].Criterion); err != nil {
 				return fmt.Errorf("gasto %q: %w", expenses[i].Concept, err)
 			}
 			for _, a := range expenses[i].Allocations {
@@ -843,7 +927,8 @@ type CostView struct {
 
 // SetReplacementCost registra una nueva estimación del costo de reposición.
 // No cambia el CPP ni ningún precio.
-func (s *Service) SetReplacementCost(ctx context.Context, p identity.Principal, companyCode, product, unitCost, note string) (CostView, error) {
+// currency vacía es la de valoración de la empresa.
+func (s *Service) SetReplacementCost(ctx context.Context, p identity.Principal, companyCode, product, unitCost, currency, note string) (CostView, error) {
 	var out CostView
 	err := s.store.InTx(ctx, func(r Repository) error {
 		c, prod, err := companyProduct(ctx, r, p, companyCode, product)
@@ -853,7 +938,11 @@ func (s *Service) SetReplacementCost(ctx context.Context, p identity.Principal, 
 		if err := p.Authorize(identity.PermReplacementCost, c.Scope(), "la empresa "+c.Code.String()); err != nil {
 			return err
 		}
-		rc, err := purchase.NewReplacementCost(p.OrganizationID, c.ID, prod.ID, unitCost, note, p.UserID, s.now())
+		cur, err := currencyOr(currency, c.Currency)
+		if err != nil {
+			return err
+		}
+		rc, err := purchase.NewReplacementCost(p.OrganizationID, c.ID, prod.ID, unitCost, cur, note, p.UserID, s.now())
 		if err != nil {
 			return err
 		}
@@ -929,6 +1018,44 @@ func (s *Service) costView(ctx context.Context, r Repository, p identity.Princip
 	}
 	slices.Reverse(v.Replacement)
 	return v, nil
+}
+
+// ExpenseInput es un gasto atribuible a una recepción.
+type ExpenseInput struct {
+	Concept   string
+	Amount    string
+	Currency  string // vacía es la de la recepción
+	Date      string // del comprobante, AAAA-MM-DD; vacía: ver AddExpense
+	Criterion string // value o quantity
+}
+
+// rateFor busca la tasa que convierte cur a la moneda de valoración de c el
+// día on; nil si no hace falta conversión.
+func rateFor(ctx context.Context, r Repository, c org.Company, cur money.Currency, on time.Time) (*exchange.Rate, error) {
+	if cur == c.Currency {
+		return nil, nil
+	}
+	rate, err := r.EffectiveRate(ctx, c.OrganizationID, c.ID, exchange.Pair(cur, c.Currency), on)
+	if err != nil {
+		return nil, fmt.Errorf("convertir %s a %s el %s: %w", cur, c.Currency, on.Format(timezone.DateLayout), err)
+	}
+	return &rate, nil
+}
+
+// currencyOr lee una moneda habilitada; vacía es def.
+func currencyOr(s string, def money.Currency) (money.Currency, error) {
+	if strings.TrimSpace(s) == "" {
+		return def, nil
+	}
+	return rates.ParseCurrency(s)
+}
+
+// dateOr lee una fecha comercial; vacía es la de hoy en Caracas.
+func dateOr(s string, now time.Time) (time.Time, error) {
+	if strings.TrimSpace(s) == "" {
+		return timezone.DateOf(now), nil
+	}
+	return rates.ParseDate(s)
 }
 
 func digest(docID id.ID, n int) string {

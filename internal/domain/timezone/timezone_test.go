@@ -43,3 +43,18 @@ func TestBusinessDayBoundaryFollowsCaracas(t *testing.T) {
 		t.Fatalf("día comercial = %s, se esperaba 2026-10-25", got)
 	}
 }
+
+func TestCommercialDate(t *testing.T) {
+	// 02:30 UTC del 28 es todavía el 27 en Caracas (UTC-4).
+	got := timezone.DateOf(time.Date(2026, 10, 28, 2, 30, 0, 0, time.UTC))
+	if got.Format(timezone.DateLayout) != "2026-10-27" || got.Location() != time.UTC || got.Hour() != 0 {
+		t.Fatalf("DateOf = %v", got)
+	}
+	d, err := timezone.ParseDate("2026-10-27")
+	if err != nil || !d.Equal(got) {
+		t.Fatalf("ParseDate = %v, %v", d, err)
+	}
+	if _, err := timezone.ParseDate("27/10/2026"); err == nil {
+		t.Error("formato inválido aceptado")
+	}
+}

@@ -6,12 +6,18 @@ import (
 	"time"
 
 	"github.com/gamijoam/inventario-go/internal/domain/decimal"
+	"github.com/gamijoam/inventario-go/internal/domain/exchange"
 	"github.com/gamijoam/inventario-go/internal/domain/id"
+	"github.com/gamijoam/inventario-go/internal/domain/money"
 	"github.com/gamijoam/inventario-go/internal/domain/purchase"
 	"github.com/gamijoam/inventario-go/internal/domain/scope"
+	"github.com/gamijoam/inventario-go/internal/domain/timezone"
 )
 
-var now = time.Date(2026, 10, 27, 15, 0, 0, 0, time.UTC)
+var (
+	now   = time.Date(2026, 10, 27, 15, 0, 0, 0, time.UTC)
+	today = timezone.DateOf(now)
+)
 
 func d(s string) decimal.Decimal { return decimal.MustParse(s) }
 
@@ -25,7 +31,8 @@ func ws(t *testing.T) scope.BusinessScope {
 }
 
 func line(n int, qty, cost string) purchase.ReceiptLine {
-	return purchase.ReceiptLine{LineNo: n, ProductID: id.MustNew(), Quantity: d(qty), UnitCost: d(cost)}
+	// Sin cambio de moneda, lo valorado es cantidad × costo.
+	return purchase.ReceiptLine{LineNo: n, ProductID: id.MustNew(), Quantity: d(qty), UnitCost: d(cost), Valued: d(qty).Mul(d(cost))}
 }
 
 func TestSupplier(t *testing.T) {
@@ -86,14 +93,14 @@ func TestOrderLifecycle(t *testing.T) {
 	p1, p2 := id.MustNew(), id.MustNew()
 	actor := id.MustNew()
 	lines := []purchase.OrderLine{{ProductID: p1, Quantity: d("10"), UnitCost: d("80")}, {ProductID: p2, Quantity: d("5"), UnitCost: d("95")}}
-	o, err := purchase.NewOrder(sc, "OC-000001", id.MustNew(), lines, "", actor, now)
+	o, err := purchase.NewOrder(sc, "OC-000001", id.MustNew(), money.USD, lines, "", actor, now)
 	if err != nil || o.Status != purchase.OrderOpen || o.Lines[1].LineNo != 2 {
 		t.Fatal(o, err)
 	}
-	if _, err := purchase.NewOrder(sc, "OC-2", id.MustNew(), append(lines, purchase.OrderLine{ProductID: p1, Quantity: d("1"), UnitCost: d("1")}), "", actor, now); !errors.Is(err, purchase.ErrInvalid) {
+	if _, err := purchase.NewOrder(sc, "OC-2", id.MustNew(), money.USD, append(lines, purchase.OrderLine{ProductID: p1, Quantity: d("1"), UnitCost: d("1")}), "", actor, now); !errors.Is(err, purchase.ErrInvalid) {
 		t.Error("producto repetido")
 	}
-	if _, err := purchase.NewOrder(sc, "OC-2", id.MustNew(), nil, "", actor, now); !errors.Is(err, purchase.ErrInvalid) {
+	if _, err := purchase.NewOrder(sc, "OC-2", id.MustNew(), money.USD, nil, "", actor, now); !errors.Is(err, purchase.ErrInvalid) {
 		t.Error("sin líneas")
 	}
 	if o, err = o.Receive(1, d("4")); err != nil || o.Lines[0].Pending().String() != "6" || o.Status != purchase.OrderOpen {
@@ -113,7 +120,7 @@ func TestOrderLifecycle(t *testing.T) {
 
 func TestReceiptLifecycle(t *testing.T) {
 	actor := id.MustNew()
-	r, err := purchase.NewReceipt(ws(t), "RC-000001", id.MustNew(), id.ID{}, "FAC-77", "", actor, now)
+	r, err := purchase.NewReceipt(ws(t), "RC-000001", id.MustNew(), id.ID{}, money.USD, today, "FAC-77", "", actor, now)
 	if err != nil || r.Status != purchase.ReceiptDraft {
 		t.Fatal(r, err)
 	}
@@ -145,5 +152,62 @@ func TestReceiptLifecycle(t *testing.T) {
 	}
 	if _, err := c.Cancel(actor, now); !errors.Is(err, purchase.ErrInvalid) {
 		t.Error("cancelar una confirmada")
+	}
+}
+
+// Una compra en VES en una empresa que valora en USD: cada línea se
+// convierte con una sola redondeada a 6 decimales y la recepción guarda la
+// tasa. Un gasto se convierte con la tasa de su fecha al registrarse.
+func TestValuateInAnotherCurrency(t *testing.T) {
+	actor := id.MustNew()
+	r, err := purchase.NewReceipt(ws(t), "RC-1", id.MustNew(), id.ID{}, money.VES, today, "", "", actor, now)
+	if err != nil {
+		t.Fatal(err)
+	}
+	r, _ = r.SetLine(purchase.ReceiptLine{ProductID: id.MustNew(), Quantity: d("3"), UnitCost: d("33.333333")})
+	r, _ = r.SetLine(purchase.ReceiptLine{ProductID: id.MustNew(), Quantity: d("2"), UnitCost: d("45.725")})
+	if _, err := r.Valuate(money.USD, nil); !errors.Is(err, exchange.ErrNoRate) {
+		t.Fatalf("sin tasa: %v", err)
+	}
+	rate, err := exchange.NewRate(id.MustNew(), id.MustNew(), exchange.RateInput{Base: money.USD, Quote: money.VES, Value: "45.725",
+		Source: money.RateSource{Type: money.SourceOfficial, Label: "BCV"}, ValidOn: today}, actor, now)
+	if err != nil {
+		t.Fatal(err)
+	}
+	v, err := r.Valuate(money.USD, &rate)
+	if err != nil || v.RateID != rate.ID {
+		t.Fatal(v, err)
+	}
+	// 99.999999 / 45.725 = 2.186987402952... → 2.186987; 91.45 / 45.725 = 2.
+	if v.Lines[0].Valued.String() != "2.186987" || v.Lines[1].Valued.String() != "2" || v.Lines[1].TotalCost().String() != "2" {
+		t.Fatalf("valorado: %v / %v", v.Lines[0].Valued, v.Lines[1].Valued)
+	}
+	if r.Lines[0].Valued.Sign() != 0 {
+		t.Error("Valuate modificó el original")
+	}
+	same, err := purchase.NewReceipt(ws(t), "RC-2", id.MustNew(), id.ID{}, money.USD, today, "", "", actor, now)
+	if err != nil {
+		t.Fatal(err)
+	}
+	same, _ = same.SetLine(purchase.ReceiptLine{ProductID: id.MustNew(), Quantity: d("3"), UnitCost: d("0.3333333")})
+	if same, err = same.Valuate(money.USD, nil); err != nil || !same.RateID.IsZero() || same.Lines[0].Valued.String() != "1" {
+		t.Fatalf("misma moneda: %v %v", same.Lines, err)
+	}
+
+	e, err := purchase.NewExpense(v, "Flete", d("91.45"), money.VES, today, purchase.ByValue, money.USD, &rate, actor, now)
+	if err != nil || e.Valued.String() != "2" || e.RateID != rate.ID || e.Currency != money.VES {
+		t.Fatalf("gasto en VES: %+v %v", e, err)
+	}
+	if _, err := purchase.NewExpense(v, "Flete", d("1"), money.VES, today, purchase.ByValue, money.USD, nil, actor, now); !errors.Is(err, exchange.ErrNoRate) {
+		t.Errorf("gasto sin tasa: %v", err)
+	}
+	if _, err := purchase.NewExpense(v, "Flete", d("0.000001"), money.VES, today, purchase.ByValue, money.USD, &rate, actor, now); !errors.Is(err, purchase.ErrInvalid) {
+		t.Errorf("gasto que convertido es cero: %v", err)
+	}
+	if _, err := purchase.NewReceipt(ws(t), "RC-3", id.MustNew(), id.ID{}, money.USD, today.AddDate(0, 0, 1), "", "", actor, now); !errors.Is(err, purchase.ErrInvalid) {
+		t.Errorf("fecha futura: %v", err)
+	}
+	if _, err := purchase.NewReceipt(ws(t), "RC-3", id.MustNew(), id.ID{}, money.Currency{}, today, "", "", actor, now); !errors.Is(err, purchase.ErrInvalid) {
+		t.Errorf("sin moneda: %v", err)
 	}
 }

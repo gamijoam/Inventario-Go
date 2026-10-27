@@ -43,10 +43,10 @@ Plantillas sembradas en cada organización (se pueden editar):
 | Rol | Permisos iniciales |
 |---|---|
 | `ADMIN_ORG` | Todo, salvo los permisos extraordinarios |
-| `ADMIN_EMPRESA` | Ver estructura y catálogo; crear sucursales y almacenes; ver y gestionar usuarios; ver, ajustar y transferir existencias; reservas, bloqueos y conteos (también aprobarlos); política de existencia negativa; compras (también confirmar) y costo de reposición |
-| `ENCARGADO` | Ver estructura y catálogo; crear almacenes; ver usuarios; ver, ajustar y transferir existencias; reservas, bloqueos y conteos (también aprobarlos); compras (también confirmar) y costo de reposición |
-| `ALMACENISTA` | Ver estructura y catálogo; ver, ajustar y transferir existencias; reservas, bloqueos y conteos (sin aprobarlos); preparar compras (sin confirmarlas) |
-| `CAJERO` | Ver estructura, catálogo y existencias; reservas (los permisos de venta llegan en M4) |
+| `ADMIN_EMPRESA` | Ver estructura y catálogo; crear sucursales y almacenes; ver y gestionar usuarios; ver, ajustar y transferir existencias; reservas, bloqueos y conteos (también aprobarlos); política de existencia negativa; compras (también confirmar) y costo de reposición; ver y registrar tasas de cambio |
+| `ENCARGADO` | Ver estructura y catálogo; crear almacenes; ver usuarios; ver, ajustar y transferir existencias; reservas, bloqueos y conteos (también aprobarlos); compras (también confirmar) y costo de reposición; ver y registrar tasas de cambio (registrar exige ámbito de empresa) |
+| `ALMACENISTA` | Ver estructura y catálogo; ver, ajustar y transferir existencias; reservas, bloqueos y conteos (sin aprobarlos); preparar compras (sin confirmarlas); ver tasas de cambio |
+| `CAJERO` | Ver estructura, catálogo y existencias; reservas; ver tasas de cambio (los permisos de venta llegan en M4) |
 | `OPERADOR_TECNICO` | Ver estructura, catálogo y existencias |
 
 ```sh

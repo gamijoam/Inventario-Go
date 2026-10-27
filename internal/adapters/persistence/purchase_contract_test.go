@@ -80,14 +80,14 @@ func TestReceiptsRecalculateTheAverageCost(t *testing.T) {
 		if got := e.valued(e.here, "A"); got != "15/1275/85" {
 			t.Fatalf("CPP: %s", got)
 		}
-		cv, err := e.buy.SetReplacementCost(c, e.admin, "principal", "A", "100", "cotización del 27/10")
+		cv, err := e.buy.SetReplacementCost(c, e.admin, "principal", "A", "100", "", "cotización del 27/10")
 		if err != nil || len(cv.Replacement) != 1 || cv.Replacement[0].UnitCost.String() != "100" {
 			t.Fatalf("reposición: %+v %v", cv, err)
 		}
 		if got := e.valued(e.here, "A"); got != "15/1275/85" {
 			t.Fatalf("la reposición no toca el CPP: %s", got)
 		}
-		cv, _ = e.buy.SetReplacementCost(c, e.admin, "principal", "A", "102", "")
+		cv, _ = e.buy.SetReplacementCost(c, e.admin, "principal", "A", "102", "", "")
 		if cv.Last == nil || cv.Last.UnitCost.String() != "95" || cv.Last.Receipt != r2.Number || len(cv.Replacement) != 2 || cv.Replacement[0].UnitCost.String() != "102" ||
 			len(cv.Balances) != 1 || cv.Balances[0].UnitCost().Value.String() != "85" {
 			t.Fatalf("costos: %+v", cv)
@@ -119,13 +119,13 @@ func TestExpensesAreCapitalized(t *testing.T) {
 		r := e.receipt("")
 		e.setLine(r.Number, "A", "10", "8") // 80
 		e.setLine(r.Number, "B", "20", "1") // 20
-		if _, err := e.buy.AddExpense(c, e.admin, r.Number, "Flete", "10", "value"); err != nil {
+		if _, err := e.buy.AddExpense(c, e.admin, r.Number, purchasing.ExpenseInput{Concept: "Flete", Amount: "10", Criterion: "value"}); err != nil {
 			t.Fatal(err)
 		}
-		if _, err := e.buy.AddExpense(c, e.admin, r.Number, "Seguro", "3", "quantity"); err != nil {
+		if _, err := e.buy.AddExpense(c, e.admin, r.Number, purchasing.ExpenseInput{Concept: "Seguro", Amount: "3", Criterion: "quantity"}); err != nil {
 			t.Fatal(err)
 		}
-		if _, err := e.buy.AddExpense(c, e.admin, r.Number, "Raro", "1", "peso"); !errors.Is(err, purchase.ErrInvalid) {
+		if _, err := e.buy.AddExpense(c, e.admin, r.Number, purchasing.ExpenseInput{Concept: "Raro", Amount: "1", Criterion: "peso"}); !errors.Is(err, purchase.ErrInvalid) {
 			t.Errorf("criterio inválido: %v", err)
 		}
 		v := e.confirm(r.Number)
@@ -155,10 +155,10 @@ func TestLateExpenseRevaluesOnlyWhatRemains(t *testing.T) {
 		e.mustAdjust("A", inventory.Out, "4", "internal_use") // salen 4 de 10
 		// El almacenista prepara compras pero no toca la valoración.
 		e.createUser(e.admin, "alm", "ALMACENISTA", auth.ScopeRef{Company: "principal", Branch: "principal"})
-		if _, err := e.buy.AddExpense(c, e.login("alm", userPassword).Principal, r.Number, "Flete", "10", ""); !errors.Is(err, identity.ErrDenied) {
+		if _, err := e.buy.AddExpense(c, e.login("alm", userPassword).Principal, r.Number, purchasing.ExpenseInput{Concept: "Flete", Amount: "10"}); !errors.Is(err, identity.ErrDenied) {
 			t.Errorf("gasto tardío sin confirmar compras: %v", err)
 		}
-		v, err := e.buy.AddExpense(c, e.admin, r.Number, "Flete", "10", "")
+		v, err := e.buy.AddExpense(c, e.admin, r.Number, purchasing.ExpenseInput{Concept: "Flete", Amount: "10"})
 		if err != nil {
 			t.Fatal(err)
 		}
@@ -172,7 +172,7 @@ func TestLateExpenseRevaluesOnlyWhatRemains(t *testing.T) {
 		}
 		// Si ya no queda nada, todo es diferencia y no hay movimiento.
 		e.mustAdjust("A", inventory.Out, "6", "internal_use")
-		v, err = e.buy.AddExpense(c, e.admin, r.Number, "Aduana", "5", "")
+		v, err = e.buy.AddExpense(c, e.admin, r.Number, purchasing.ExpenseInput{Concept: "Aduana", Amount: "5"})
 		if err != nil || v.Expenses[1].Allocations[0].Variance.String() != "5" || len(v.Movements) != 0 {
 			t.Fatalf("sin existencia: %+v %v", v, err)
 		}
@@ -266,7 +266,7 @@ func TestPurchasePermissions(t *testing.T) {
 		if _, err := e.buy.Receipts(c, caja, ""); !errors.Is(err, identity.ErrDenied) {
 			t.Errorf("cajero lista compras: %v", err)
 		}
-		if _, err := e.buy.SetReplacementCost(c, alm, "principal", "A", "1", ""); !errors.Is(err, identity.ErrDenied) {
+		if _, err := e.buy.SetReplacementCost(c, alm, "principal", "A", "1", "", ""); !errors.Is(err, identity.ErrDenied) {
 			t.Errorf("almacenista fija reposición: %v", err)
 		}
 		if _, err := e.buy.CreateReceipt(c, e.admin, purchasing.ReceiptInput{Where: e.here, Supplier: "nadie"}); !errors.Is(err, apporg.ErrNotFound) {
@@ -308,14 +308,14 @@ func TestPurchaseDocumentsAreGuarded(t *testing.T) {
 		e.in(e.here, "A", "4", "5")
 		r := e.receipt("")
 		e.setLine(r.Number, "A", "6", "10")
-		if _, err := e.buy.AddExpense(c, e.admin, r.Number, "Flete", "1", ""); err != nil {
+		if _, err := e.buy.AddExpense(c, e.admin, r.Number, purchasing.ExpenseInput{Concept: "Flete", Amount: "1"}); err != nil {
 			t.Fatal(err)
 		}
 		e.confirm(r.Number)
 		if got := e.valued(e.here, "A"); got != "10/81/8.1" {
 			t.Fatalf("A: %s", got)
 		}
-		if _, err := e.buy.SetReplacementCost(c, e.admin, "principal", "A", "9", "nota"); err != nil {
+		if _, err := e.buy.SetReplacementCost(c, e.admin, "principal", "A", "9", "", "nota"); err != nil {
 			t.Fatal(err)
 		}
 		pp := e.store.Dialect.Placeholder

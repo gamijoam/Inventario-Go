@@ -4,9 +4,10 @@ La **recepción confirmada** es lo único que mueve existencia: cada producto
 entra al almacén con su costo de compra más los gastos que le corresponden,
 y el costo promedio (CPP) se recalcula. El precio de venta **no cambia**.
 
-Los importes van en la moneda de valoración de la empresa. Las compras en
-otra moneda llegan con las tasas de cambio (BP-M3-002). Los costos se
-registran **sin impuestos**.
+Cada documento va en su moneda: por defecto, la de valoración de la
+empresa. Al confirmar, una compra en otra moneda se convierte con la tasa
+vigente a la fecha de la factura (vea [Tasas de cambio](tasas.md)). Los
+costos se registran **sin impuestos**.
 
 ## Proveedores
 
@@ -21,7 +22,7 @@ compras con ámbito de organización.
 ## Órdenes de compra (opcionales)
 
 ```sh
-balanzapro purchase order create --supplier DIST --line HARINA:100:1.25 --line ARROZ:50:0.90
+balanzapro purchase order create --supplier DIST --line HARINA:100:1.25 --line ARROZ:50:0.90 [--currency VES]
 balanzapro purchase order show OC-000001
 balanzapro purchase order list [--status open]
 balanzapro purchase order cancel OC-000001
@@ -36,9 +37,10 @@ pendiente.
 ```sh
 balanzapro purchase receipt create --order OC-000001 --document FAC-778     # precarga lo pendiente
 balanzapro purchase receipt create --supplier DIST [--warehouse W]          # directa, sin orden
+balanzapro purchase receipt create --supplier DIST --currency VES --date 2026-10-22   # factura en VES
 balanzapro purchase receipt line RC-000001 --product HARINA --qty 60 --unit-cost 1.27
 balanzapro purchase receipt remove-line RC-000001 --product ARROZ
-balanzapro purchase receipt expense RC-000001 --concept Flete --amount 30 [--by quantity]
+balanzapro purchase receipt expense RC-000001 --concept Flete --amount 30 [--by quantity] [--currency USD] [--date 2026-10-22]
 balanzapro purchase receipt confirm RC-000001
 balanzapro purchase receipt show RC-000001
 ```
@@ -49,6 +51,8 @@ balanzapro purchase receipt show RC-000001
   en la orden se puede recibir igual.
 - `confirm` puede repetirse sin efecto: la segunda vez responde "ya lo
   estaba".
+- La recepción toma la moneda de su orden; `--date` es la fecha de la
+  factura (por defecto, hoy) y decide la tasa.
 - Un borrador se descarta con `cancel`. Una recepción confirmada no se
   cancela ni se edita.
 
@@ -59,6 +63,9 @@ Flete, seguro y otros gastos de la compra se reparten entre las líneas:
 - **por valor** (predeterminado): en proporción al costo de compra de cada
   línea;
 - **por cantidad** (`--by quantity`): en proporción a las unidades.
+
+Un gasto en otra moneda se convierte al registrarlo, con la tasa vigente a
+su fecha, y se reparte ya convertido.
 
 El reparto se redondea a 6 decimales y el residuo va a la línea mayor, así
 que la suma es exacta. `receipt show --json` muestra la base, el importe y lo
@@ -75,7 +82,7 @@ recepciones.
 
 ```sh
 balanzapro purchase cost show --product HARINA
-balanzapro purchase cost set-replacement --product HARINA --unit-cost 1.35 --note "cotización 27/10"
+balanzapro purchase cost set-replacement --product HARINA --unit-cost 1.35 --note "cotización 27/10" [--currency VES]
 ```
 
 `cost show` muestra tres costos que nunca se mezclan:
@@ -83,8 +90,8 @@ balanzapro purchase cost set-replacement --product HARINA --unit-cost 1.35 --not
 | Costo | Qué es | De dónde sale |
 |---|---|---|
 | Costo promedio | Valoración del inventario, por almacén | Kardex |
-| Último costo de compra | Lo pagado en la última recepción, con y sin gastos | Recepciones confirmadas |
-| Costo de reposición | Estimación de lo que costaría volver a comprar | Registro manual, con historial |
+| Último costo de compra | Lo pagado en la última recepción, en su moneda y convertido, con y sin gastos | Recepciones confirmadas |
+| Costo de reposición | Estimación de lo que costaría volver a comprar, en su moneda | Registro manual, con historial |
 
 El costo de reposición no cambia el costo promedio ni los precios; servirá
 para las sugerencias de precio (BP-M3-003).
@@ -101,6 +108,6 @@ Crear proveedores exige además ámbito de organización (`ADMIN_ORG`).
 
 ## Qué no se puede hacer todavía
 
-- Compras en otra moneda con tasa (BP-M3-002).
+- Diferencias cambiarias: llegarán con los pagos a proveedores.
 - Devoluciones a proveedor y reverso de una recepción confirmada.
 - Impuestos de compra (M4).

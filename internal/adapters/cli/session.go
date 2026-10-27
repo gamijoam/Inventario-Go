@@ -18,8 +18,10 @@ import (
 	appcatalog "github.com/gamijoam/inventario-go/internal/application/catalog"
 	apporg "github.com/gamijoam/inventario-go/internal/application/org"
 	"github.com/gamijoam/inventario-go/internal/application/purchasing"
+	"github.com/gamijoam/inventario-go/internal/application/rates"
 	"github.com/gamijoam/inventario-go/internal/application/stock"
 	"github.com/gamijoam/inventario-go/internal/domain/catalog"
+	"github.com/gamijoam/inventario-go/internal/domain/exchange"
 	"github.com/gamijoam/inventario-go/internal/domain/identity"
 	"github.com/gamijoam/inventario-go/internal/domain/inventory"
 	"github.com/gamijoam/inventario-go/internal/domain/org"
@@ -38,6 +40,7 @@ type appSession struct {
 	cat   *appcatalog.Service
 	stock *stock.Service
 	buy   *purchasing.Service
+	fx    *rates.Service
 	cur   apporg.Context
 	who   auth.Authenticated
 	close func()
@@ -76,6 +79,7 @@ func openStore(ctx context.Context, env Env, flags *globalFlags, errOut io.Write
 	s.cat = appcatalog.NewService(store.CatalogStore(), func() time.Time { return time.Now().UTC() })
 	s.stock = stock.NewService(store.StockStore(), func() time.Time { return time.Now().UTC() })
 	s.buy = purchasing.NewService(store.PurchaseStore(), s.stock, func() time.Time { return time.Now().UTC() })
+	s.fx = rates.NewService(store.RateStore(), func() time.Time { return time.Now().UTC() })
 	if s.cur, err = s.org.Current(ctx); err != nil {
 		s.close()
 		return appSession{}, appError(err)
@@ -230,12 +234,12 @@ func appError(err error) error {
 		return &exitError{code: ExitConflict, kind: "conflict", msg: err.Error()}
 	case errors.Is(err, apporg.ErrNotFound), errors.Is(err, apporg.ErrNotBootstrapped):
 		return &exitError{code: ExitNotFound, kind: "not_found", msg: err.Error()}
-	case errors.Is(err, inventory.ErrValuation):
+	case errors.Is(err, inventory.ErrValuation), errors.Is(err, exchange.ErrNoRate):
 		return &exitError{code: ExitConflict, kind: "conflict", msg: err.Error()}
 	case errors.Is(err, inventory.ErrInsufficient):
 		return &exitError{code: ExitInsufficientStock, kind: "insufficient_stock", msg: err.Error()}
 	case errors.Is(err, org.ErrInvalid), errors.Is(err, identity.ErrInvalid), errors.Is(err, catalog.ErrInvalid), errors.Is(err, inventory.ErrInvalid),
-		errors.Is(err, purchase.ErrInvalid):
+		errors.Is(err, purchase.ErrInvalid), errors.Is(err, exchange.ErrInvalid):
 		return usageErrorf("%s", err)
 	default:
 		return err

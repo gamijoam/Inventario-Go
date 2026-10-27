@@ -5,6 +5,10 @@
 // línea entra al almacén con su costo capitalizable (costo de compra más los
 // gastos que se le prorratean) y recalcula el CPP. El precio de venta no
 // cambia: eso es otro flujo con su propia aprobación (DEC-007.P2).
+//
+// Los documentos van en su moneda original (BP-M3-002). Al confirmar, cada
+// línea se convierte a la moneda de valoración de la empresa con la tasa
+// vigente a la fecha del documento, y la tasa aplicada queda registrada.
 package purchase
 
 import (
@@ -16,10 +20,13 @@ import (
 	"unicode/utf8"
 
 	"github.com/gamijoam/inventario-go/internal/domain/decimal"
+	"github.com/gamijoam/inventario-go/internal/domain/exchange"
 	"github.com/gamijoam/inventario-go/internal/domain/id"
 	"github.com/gamijoam/inventario-go/internal/domain/inventory"
+	"github.com/gamijoam/inventario-go/internal/domain/money"
 	"github.com/gamijoam/inventario-go/internal/domain/org"
 	"github.com/gamijoam/inventario-go/internal/domain/scope"
+	"github.com/gamijoam/inventario-go/internal/domain/timezone"
 )
 
 var ErrInvalid = errors.New("dato de compra inválido")
@@ -29,6 +36,26 @@ var ErrInvalid = errors.New("dato de compra inválido")
 const AmountScale = inventory.ValueScale
 
 const rounding = decimal.HalfAwayFromZero
+
+// Valuate lleva amount de la moneda from a la de valoración to, redondeado a
+// AmountScale. Sin cambio de moneda no hace falta tasa; con cambio, rate
+// debe cubrir el par.
+func Valuate(amount decimal.Decimal, from, to money.Currency, rate *exchange.Rate) (decimal.Decimal, error) {
+	if from == to {
+		return amount.Round(AmountScale, rounding), nil
+	}
+	if rate == nil || !rate.Covers(from, to) {
+		return decimal.Decimal{}, fmt.Errorf("%w: %s", exchange.ErrNoRate, exchange.Pair(from, to))
+	}
+	return rate.Convert(amount, from, AmountScale)
+}
+
+func requireCurrency(c money.Currency) error {
+	if c.Code() == "" {
+		return fmt.Errorf("%w: falta la moneda", ErrInvalid)
+	}
+	return nil
+}
 
 // Supplier es un proveedor de la organización.
 type Supplier struct {
@@ -113,6 +140,7 @@ type Order struct {
 	Scope      scope.BusinessScope // sucursal
 	Number     string
 	SupplierID id.ID
+	Currency   money.Currency // de los costos pactados
 	Status     OrderStatus
 	Note       string
 	CreatedBy  id.ID
@@ -122,7 +150,10 @@ type Order struct {
 	Lines      []OrderLine
 }
 
-func NewOrder(branch scope.BusinessScope, number string, supplierID id.ID, lines []OrderLine, note string, actor id.ID, now time.Time) (Order, error) {
+func NewOrder(branch scope.BusinessScope, number string, supplierID id.ID, currency money.Currency, lines []OrderLine, note string, actor id.ID, now time.Time) (Order, error) {
+	if err := requireCurrency(currency); err != nil {
+		return Order{}, err
+	}
 	if len(lines) == 0 {
 		return Order{}, fmt.Errorf("%w: la orden no tiene líneas", ErrInvalid)
 	}
@@ -145,7 +176,7 @@ func NewOrder(branch scope.BusinessScope, number string, supplierID id.ID, lines
 	if err != nil {
 		return Order{}, err
 	}
-	return Order{ID: oid, Scope: branch, Number: number, SupplierID: supplierID, Status: OrderOpen, Note: n, CreatedBy: actor, CreatedAt: now.UTC(), Lines: out}, nil
+	return Order{ID: oid, Scope: branch, Number: number, SupplierID: supplierID, Currency: currency, Status: OrderOpen, Note: n, CreatedBy: actor, CreatedAt: now.UTC(), Lines: out}, nil
 }
 
 // Line devuelve la línea lineNo.
@@ -203,19 +234,25 @@ type ReceiptLine struct {
 	ProductID   id.ID
 	OrderLineNo int // 0 si no viene de una orden
 	Quantity    decimal.Decimal
-	UnitCost    decimal.Decimal
-	// Expenses es lo capitalizado de gastos prorrateados a la línea.
+	UnitCost    decimal.Decimal // en la moneda del documento
+	// Valued es el costo de compra en la moneda de valoración; se fija al
+	// confirmar.
+	Valued decimal.Decimal
+	// Expenses es lo capitalizado de gastos prorrateados a la línea, en la
+	// moneda de valoración.
 	Expenses   decimal.Decimal
 	MovementID id.ID // entrada al kardex, al confirmar
 }
 
-// BaseCost es cantidad × costo unitario, a la escala del valor.
+// BaseCost es cantidad × costo unitario en la moneda del documento, a la
+// escala del valor.
 func (l ReceiptLine) BaseCost() decimal.Decimal {
 	return l.Quantity.Mul(l.UnitCost).Round(AmountScale, rounding)
 }
 
-// TotalCost es el costo capitalizable de la línea: compra + gastos.
-func (l ReceiptLine) TotalCost() decimal.Decimal { return l.BaseCost().Add(l.Expenses) }
+// TotalCost es el costo capitalizable de la línea en la moneda de
+// valoración: compra + gastos.
+func (l ReceiptLine) TotalCost() decimal.Decimal { return l.Valued.Add(l.Expenses) }
 
 // Receipt es la entrada física de mercancía de un proveedor a un almacén.
 type Receipt struct {
@@ -224,6 +261,9 @@ type Receipt struct {
 	Number           string
 	SupplierID       id.ID
 	OrderID          id.ID // cero si es directa
+	Currency         money.Currency
+	DocumentDate     time.Time // fecha comercial de la factura; decide la tasa
+	RateID           id.ID     // tasa aplicada al confirmar; cero sin conversión
 	Status           ReceiptStatus
 	SupplierDocument string // p. ej. el número de factura
 	Note             string
@@ -234,7 +274,13 @@ type Receipt struct {
 	Lines            []ReceiptLine
 }
 
-func NewReceipt(warehouse scope.BusinessScope, number string, supplierID, orderID id.ID, document, note string, actor id.ID, now time.Time) (Receipt, error) {
+func NewReceipt(warehouse scope.BusinessScope, number string, supplierID, orderID id.ID, currency money.Currency, date time.Time, document, note string, actor id.ID, now time.Time) (Receipt, error) {
+	if err := requireCurrency(currency); err != nil {
+		return Receipt{}, err
+	}
+	if err := documentDate(date, now); err != nil {
+		return Receipt{}, err
+	}
 	doc, err := parseText(document, "el documento del proveedor", false)
 	if err != nil {
 		return Receipt{}, err
@@ -247,7 +293,7 @@ func NewReceipt(warehouse scope.BusinessScope, number string, supplierID, orderI
 	if err != nil {
 		return Receipt{}, err
 	}
-	return Receipt{ID: rid, Scope: warehouse, Number: number, SupplierID: supplierID, OrderID: orderID, Status: ReceiptDraft,
+	return Receipt{ID: rid, Scope: warehouse, Number: number, SupplierID: supplierID, OrderID: orderID, Currency: currency, DocumentDate: date, Status: ReceiptDraft,
 		SupplierDocument: doc, Note: n, CreatedBy: actor, CreatedAt: now.UTC()}, nil
 }
 
@@ -259,7 +305,7 @@ func (r Receipt) SetLine(l ReceiptLine) (Receipt, error) {
 	if l.Quantity.Sign() <= 0 || l.UnitCost.IsNegative() {
 		return Receipt{}, fmt.Errorf("%w: cantidad positiva y costo no negativo", ErrInvalid)
 	}
-	l.Expenses, l.MovementID = decimal.Zero(), id.ID{}
+	l.Valued, l.Expenses, l.MovementID = decimal.Zero(), decimal.Zero(), id.ID{}
 	r.Lines = slices.Clone(r.Lines)
 	if i := slices.IndexFunc(r.Lines, func(x ReceiptLine) bool { return x.ProductID == l.ProductID }); i >= 0 {
 		l.LineNo = r.Lines[i].LineNo
@@ -284,6 +330,38 @@ func (r Receipt) RemoveLine(productID id.ID) (Receipt, error) {
 		return Receipt{}, fmt.Errorf("%w: el producto no está en la recepción", ErrInvalid)
 	}
 	r.Lines = slices.Delete(slices.Clone(r.Lines), i, i+1)
+	return r, nil
+}
+
+// documentDate exige una fecha comercial que no sea posterior a hoy.
+func documentDate(date, now time.Time) error {
+	if date.IsZero() {
+		return fmt.Errorf("%w: falta la fecha del documento", ErrInvalid)
+	}
+	if date.After(timezone.DateOf(now)) {
+		return fmt.Errorf("%w: la fecha %s es futura", ErrInvalid, date.Format(timezone.DateLayout))
+	}
+	return nil
+}
+
+// Valuate fija el costo de compra de cada línea en la moneda de valoración
+// to, con la tasa vigente a la fecha del documento (nil sin conversión).
+func (r Receipt) Valuate(to money.Currency, rate *exchange.Rate) (Receipt, error) {
+	r.Lines = slices.Clone(r.Lines)
+	r.RateID = id.ID{}
+	if r.Currency != to {
+		if rate == nil {
+			return Receipt{}, fmt.Errorf("%w: %s", exchange.ErrNoRate, exchange.Pair(r.Currency, to))
+		}
+		r.RateID = rate.ID
+	}
+	for i, l := range r.Lines {
+		v, err := Valuate(l.Quantity.Mul(l.UnitCost), r.Currency, to, rate)
+		if err != nil {
+			return Receipt{}, err
+		}
+		r.Lines[i].Valued = v
+	}
 	return r, nil
 }
 
@@ -341,12 +419,18 @@ type Allocation struct {
 	MovementID  id.ID // ajuste de valoración de un gasto tardío
 }
 
-// Expense es un gasto atribuible a una recepción (flete, seguro…).
+// Expense es un gasto atribuible a una recepción (flete, seguro…). Va en
+// su moneda; Valued es su importe en la moneda de valoración, convertido
+// al registrarlo con la tasa vigente a su fecha.
 type Expense struct {
 	ID          id.ID
 	ReceiptID   id.ID
 	Concept     string
 	Amount      decimal.Decimal
+	Currency    money.Currency
+	Date        time.Time // fecha comercial del comprobante
+	RateID      id.ID     // cero sin conversión
+	Valued      decimal.Decimal
 	Criterion   Criterion
 	Late        bool // registrado tras confirmar la recepción
 	CreatedBy   id.ID
@@ -354,7 +438,16 @@ type Expense struct {
 	Allocations []Allocation
 }
 
-func NewExpense(r Receipt, concept string, amount decimal.Decimal, c Criterion, actor id.ID, now time.Time) (Expense, error) {
+// NewExpense registra un gasto en currency con fecha date y lo convierte a
+// la moneda de valoración to con rate (nil si no hay cambio de moneda).
+func NewExpense(r Receipt, concept string, amount decimal.Decimal, currency money.Currency, date time.Time, c Criterion,
+	to money.Currency, rate *exchange.Rate, actor id.ID, now time.Time) (Expense, error) {
+	if err := requireCurrency(currency); err != nil {
+		return Expense{}, err
+	}
+	if err := documentDate(date, now); err != nil {
+		return Expense{}, err
+	}
 	if r.Status == ReceiptCancelled {
 		return Expense{}, fmt.Errorf("%w: la recepción %s está cancelada", ErrInvalid, r.Number)
 	}
@@ -365,12 +458,23 @@ func NewExpense(r Receipt, concept string, amount decimal.Decimal, c Criterion, 
 	if amount.Sign() <= 0 {
 		return Expense{}, fmt.Errorf("%w: el gasto debe ser mayor que cero", ErrInvalid)
 	}
+	valued, err := Valuate(amount, currency, to, rate)
+	if err != nil {
+		return Expense{}, err
+	}
+	if valued.Sign() <= 0 {
+		return Expense{}, fmt.Errorf("%w: el gasto convertido a %s es cero", ErrInvalid, to)
+	}
+	var rateID id.ID
+	if currency != to {
+		rateID = rate.ID
+	}
 	eid, err := id.New()
 	if err != nil {
 		return Expense{}, err
 	}
-	return Expense{ID: eid, ReceiptID: r.ID, Concept: con, Amount: amount, Criterion: c, Late: r.Status == ReceiptConfirmed,
-		CreatedBy: actor, CreatedAt: now.UTC()}, nil
+	return Expense{ID: eid, ReceiptID: r.ID, Concept: con, Amount: amount, Currency: currency, Date: date, RateID: rateID, Valued: valued,
+		Criterion: c, Late: r.Status == ReceiptConfirmed, CreatedBy: actor, CreatedAt: now.UTC()}, nil
 }
 
 // Allocate reparte amount entre las líneas según el criterio, redondeando
@@ -385,7 +489,7 @@ func Allocate(lines []ReceiptLine, amount decimal.Decimal, c Criterion) ([]Alloc
 	for i, l := range lines {
 		base := l.Quantity
 		if c == ByValue {
-			base = l.BaseCost()
+			base = l.Valued
 		}
 		out[i] = Allocation{LineNo: l.LineNo, Base: base}
 		total = total.Add(base)
@@ -442,12 +546,16 @@ type ReplacementCost struct {
 	CompanyID      id.ID
 	ProductID      id.ID
 	UnitCost       decimal.Decimal
+	Currency       money.Currency
 	Note           string
 	ActorID        id.ID
 	OccurredAt     time.Time
 }
 
-func NewReplacementCost(orgID, companyID, productID id.ID, unitCost, note string, actor id.ID, now time.Time) (ReplacementCost, error) {
+func NewReplacementCost(orgID, companyID, productID id.ID, unitCost string, currency money.Currency, note string, actor id.ID, now time.Time) (ReplacementCost, error) {
+	if err := requireCurrency(currency); err != nil {
+		return ReplacementCost{}, err
+	}
 	c, err := inventory.ParseUnitCost(unitCost)
 	if err != nil {
 		return ReplacementCost{}, err
@@ -460,5 +568,5 @@ func NewReplacementCost(orgID, companyID, productID id.ID, unitCost, note string
 	if err != nil {
 		return ReplacementCost{}, err
 	}
-	return ReplacementCost{ID: rid, OrganizationID: orgID, CompanyID: companyID, ProductID: productID, UnitCost: c, Note: n, ActorID: actor, OccurredAt: now.UTC()}, nil
+	return ReplacementCost{ID: rid, OrganizationID: orgID, CompanyID: companyID, ProductID: productID, UnitCost: c, Currency: currency, Note: n, ActorID: actor, OccurredAt: now.UTC()}, nil
 }
