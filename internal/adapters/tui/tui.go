@@ -1,7 +1,8 @@
 // Package tui implementa la interfaz interactiva de terminal (Bubble Tea v2).
 //
 // La TUI no contiene reglas de negocio: solo presenta y dispara casos de uso
-// de la capa application, igual que la CLI.
+// de la capa application a través de Backend, igual que la CLI. Cada
+// pantalla ocupa la terminal completa; Esc vuelve a la anterior.
 package tui
 
 import (
@@ -11,7 +12,6 @@ import (
 	"strings"
 
 	tea "charm.land/bubbletea/v2"
-	"charm.land/lipgloss/v2"
 	"github.com/charmbracelet/colorprofile"
 
 	"github.com/gamijoam/inventario-go/internal/application/admin"
@@ -30,6 +30,10 @@ type Options struct {
 	Build   buildinfo.Info
 	// Doctor ejecuta el diagnóstico; la TUI lo llama de forma asíncrona.
 	Doctor func(context.Context) admin.Report
+	// Backend da acceso a los módulos. Nil si la base no está disponible:
+	// entonces solo hay diagnóstico y versión, y Unavailable explica por qué.
+	Backend     Backend
+	Unavailable string
 }
 
 // Run inicia la TUI y bloquea hasta que el usuario sale o ctx se cancela.
@@ -46,114 +50,225 @@ func Run(ctx context.Context, in io.Reader, out io.Writer, opts Options) error {
 	return err
 }
 
-type screen int
+// screen es una pantalla completa. Las pantallas son punteros: Update las
+// modifica y devuelve el comando siguiente.
+type screen interface {
+	Title() string
+	// Help resume los atajos de la pantalla para la barra inferior.
+	Help() string
+	// Init recibe el identificador con que la raíz le entregará sus
+	// resultados asíncronos (loaded.to) y devuelve la carga inicial.
+	Init(id int) tea.Cmd
+	Update(msg tea.Msg) tea.Cmd
+	View(width, height int) string
+	// Capturing indica que el usuario está escribiendo: q y Esc dejan de
+	// ser atajos globales y llegan a la pantalla.
+	Capturing() bool
+}
 
-const (
-	screenMenu screen = iota
-	screenDoctor
-	screenVersion
+// refresher es una pantalla que recarga sus datos al volver a ella.
+type refresher interface{ Refresh() tea.Cmd }
+
+// app es el contexto compartido por las pantallas.
+type app struct {
+	ctx     context.Context
+	opts    Options
+	session *Session
+}
+
+type (
+	pushMsg   struct{ s screen }
+	popMsg    struct{ status string }
+	statusMsg struct {
+		text string
+		err  error
+	}
+	// sessionMsg trae el resultado de retomar o iniciar sesión.
+	sessionMsg struct {
+		s     Session
+		err   error
+		login bool // viene del formulario, no de retomar la sesión guardada
+	}
+	loggedOutMsg struct{ err error }
+	// loaded entrega un resultado asíncrono a la pantalla to.
+	loaded struct {
+		to  int
+		v   any
+		err error
+	}
 )
 
-type menuItem struct {
-	label  string
-	target screen
-	quit   bool
+func push(s screen) tea.Cmd { return func() tea.Msg { return pushMsg{s} } }
+
+// back vuelve a la pantalla anterior, que se recarga si sabe hacerlo.
+func back(status string) tea.Cmd { return func() tea.Msg { return popMsg{status} } }
+
+func setStatus(text string, err error) tea.Cmd {
+	return func() tea.Msg { return statusMsg{text, err} }
 }
 
-var menu = []menuItem{
-	{label: "Diagnóstico", target: screenDoctor},
-	{label: "Versión", target: screenVersion},
-	{label: "Salir", quit: true},
+// load ejecuta f fuera del ciclo de la interfaz y entrega su resultado a la
+// pantalla to.
+func load(to int, f func() (any, error)) tea.Cmd {
+	return func() tea.Msg {
+		v, err := f()
+		return loaded{to, v, err}
+	}
 }
-
-type doctorDoneMsg admin.Report
 
 // Model es el estado de la TUI. Se exporta para poder probarlo sin terminal.
 type Model struct {
-	ctx           context.Context
-	opts          Options
-	screen        screen
-	cursor        int
+	app           *app
+	stack         []screen
+	ids           []int
+	seq           int
 	width, height int
-	report        *admin.Report
-	running       bool
+	status        string
+	statusErr     bool
+	checking      bool // retomando la sesión guardada
 }
 
-// New crea el modelo inicial.
+// New crea el modelo inicial. Con Backend, empieza retomando la sesión de
+// este equipo; si no hay, pide iniciarla.
 func New(ctx context.Context, opts Options) Model {
-	return Model{ctx: ctx, opts: opts}
+	m := Model{app: &app{ctx: ctx, opts: opts}}
+	if opts.Backend == nil {
+		m.reset(newMenu(m.app))
+		m.status, m.statusErr = opts.Unavailable, opts.Unavailable != ""
+		return m
+	}
+	m.checking = true
+	return m
 }
 
-func (m Model) Init() tea.Cmd { return nil }
+func (m Model) Init() tea.Cmd {
+	if !m.checking {
+		return nil
+	}
+	a := m.app
+	return func() tea.Msg {
+		s, err := a.opts.Backend.Resume(a.ctx)
+		return sessionMsg{s: s, err: err}
+	}
+}
+
+// reset deja s como única pantalla.
+func (m *Model) reset(s screen) tea.Cmd {
+	m.stack, m.ids = nil, nil
+	return m.open(s)
+}
+
+func (m *Model) open(s screen) tea.Cmd {
+	m.seq++
+	m.stack = append(m.stack, s)
+	m.ids = append(m.ids, m.seq)
+	cmd := s.Init(m.seq)
+	if m.width > 0 {
+		s.Update(tea.WindowSizeMsg{Width: m.width, Height: m.bodyHeight()})
+	}
+	return cmd
+}
+
+func (m Model) top() screen {
+	if len(m.stack) == 0 {
+		return nil
+	}
+	return m.stack[len(m.stack)-1]
+}
+
+// bodyHeight descuenta la cabecera (2 líneas) y el pie (2 líneas).
+func (m Model) bodyHeight() int { return max(m.height-4, 1) }
 
 func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 	switch msg := msg.(type) {
 	case tea.WindowSizeMsg:
 		m.width, m.height = msg.Width, msg.Height
-	case doctorDoneMsg:
-		report := admin.Report(msg)
-		m.report, m.running = &report, false
-	case tea.KeyPressMsg:
-		return m.handleKey(msg.String())
-	}
-	return m, nil
-}
-
-func (m Model) handleKey(key string) (tea.Model, tea.Cmd) {
-	switch key {
-	case "ctrl+c", "q":
-		return m, tea.Quit
-	}
-	if m.screen != screenMenu {
-		switch key {
-		case "esc", "backspace", "left", "h":
-			m.screen = screenMenu
-		case "r":
-			if m.screen == screenDoctor && !m.running {
-				return m.startDoctor()
+		body := tea.WindowSizeMsg{Width: msg.Width, Height: m.bodyHeight()}
+		for _, s := range m.stack {
+			s.Update(body)
+		}
+		return m, nil
+	case sessionMsg:
+		m.checking = false
+		if msg.err != nil {
+			if msg.login {
+				// El formulario muestra el error y sigue abierto.
+				return m, m.top().Update(msg)
+			}
+			return m, m.reset(newLogin(m.app))
+		}
+		s := msg.s
+		m.app.session = &s
+		m.status, m.statusErr = "", false
+		return m, m.reset(newMenu(m.app))
+	case loggedOutMsg:
+		m.app.session = nil
+		m.status, m.statusErr = "sesión cerrada", false
+		if msg.err != nil {
+			m.status, m.statusErr = "no se pudo cerrar la sesión: "+msg.err.Error(), true
+		}
+		return m, m.reset(newLogin(m.app))
+	case pushMsg:
+		m.status, m.statusErr = "", false
+		return m, m.open(msg.s)
+	case popMsg:
+		if len(m.stack) > 1 {
+			m.stack, m.ids = m.stack[:len(m.stack)-1], m.ids[:len(m.ids)-1]
+		}
+		m.status, m.statusErr = msg.status, false
+		if r, ok := m.top().(refresher); ok {
+			return m, r.Refresh()
+		}
+		return m, nil
+	case statusMsg:
+		m.status, m.statusErr = msg.text, msg.err != nil
+		if msg.err != nil {
+			m.status = describe(msg.err)
+			if msg.text != "" {
+				m.status = msg.text + ": " + m.status
 			}
 		}
 		return m, nil
+	case loaded:
+		for i, sid := range m.ids {
+			if sid == msg.to {
+				return m, m.stack[i].Update(msg)
+			}
+		}
+		return m, nil // la pantalla ya se cerró
+	case tea.KeyPressMsg:
+		return m.handleKey(msg)
 	}
-	switch key {
-	case "up", "k":
-		m.cursor = (m.cursor - 1 + len(menu)) % len(menu)
-	case "down", "j", "tab":
-		m.cursor = (m.cursor + 1) % len(menu)
-	case "enter", "right", "l":
-		item := menu[m.cursor]
-		if item.quit {
-			return m, tea.Quit
-		}
-		m.screen = item.target
-		if item.target == screenDoctor && m.report == nil && !m.running {
-			return m.startDoctor()
-		}
-	case "esc":
-		return m, tea.Quit
+	if t := m.top(); t != nil {
+		return m, t.Update(msg)
 	}
 	return m, nil
 }
 
-func (m Model) startDoctor() (tea.Model, tea.Cmd) {
-	m.running = true
-	ctx, run := m.ctx, m.opts.Doctor
-	return m, func() tea.Msg {
-		if run == nil {
-			return doctorDoneMsg{}
-		}
-		return doctorDoneMsg(run(ctx))
+func (m Model) handleKey(msg tea.KeyPressMsg) (tea.Model, tea.Cmd) {
+	if msg.String() == "ctrl+c" {
+		return m, tea.Quit
 	}
+	t := m.top()
+	if t == nil {
+		return m, nil
+	}
+	if t.Capturing() {
+		return m, t.Update(msg)
+	}
+	switch msg.String() {
+	case "q":
+		return m, tea.Quit
+	case "esc":
+		if len(m.stack) > 1 {
+			return m.Update(popMsg{})
+		}
+		if _, isMenu := t.(*menuScreen); isMenu {
+			return m, tea.Quit
+		}
+	}
+	return m, t.Update(msg)
 }
-
-var (
-	titleStyle    = lipgloss.NewStyle().Bold(true).Foreground(lipgloss.Color("#5FAFFF"))
-	selectedStyle = lipgloss.NewStyle().Bold(true).Reverse(true)
-	hintStyle     = lipgloss.NewStyle().Faint(true)
-	okStyle       = lipgloss.NewStyle().Foreground(lipgloss.Color("#5FD75F"))
-	warnStyle     = lipgloss.NewStyle().Foreground(lipgloss.Color("#FFD75F"))
-	failStyle     = lipgloss.NewStyle().Bold(true).Foreground(lipgloss.Color("#FF5F5F"))
-)
 
 func (m Model) View() tea.View {
 	v := tea.NewView(m.render())
@@ -167,55 +282,64 @@ func (m Model) render() string {
 		return fmt.Sprintf("Terminal demasiado pequeña (%dx%d).\nMínimo %dx%d. Agrande la ventana o pulse q para salir.",
 			m.width, m.height, MinWidth, MinHeight)
 	}
-	var b strings.Builder
-	b.WriteString(titleStyle.Render("BalanzaPro") + "  " + hintStyle.Render(m.opts.Build.Version) + "\n\n")
-	switch m.screen {
-	case screenMenu:
-		for i, item := range menu {
-			line := "  " + item.label
-			if i == m.cursor {
-				line = selectedStyle.Render("> " + item.label)
-			}
-			b.WriteString(line + "\n")
-		}
-		b.WriteString("\n" + hintStyle.Render("↑/↓ mover · enter abrir · q salir"))
-	case screenDoctor:
-		b.WriteString("Diagnóstico\n\n")
-		switch {
-		case m.running:
-			b.WriteString("Ejecutando verificaciones…\n")
-		case m.report != nil:
-			for _, r := range m.report.Checks {
-				b.WriteString(fmt.Sprintf("%s %-10s %s\n", statusLabel(r.Status), r.Name, r.Detail))
-			}
-		}
-		b.WriteString("\n" + hintStyle.Render("r repetir · esc volver · q salir"))
-	case screenVersion:
-		bi := m.opts.Build
-		b.WriteString("Versión\n\n")
-		b.WriteString(fmt.Sprintf("Versión:    %s\nCommit:     %s\nCompilado:  %s\nGo:         %s %s/%s\n",
-			bi.Version, orUnknown(bi.Commit), orUnknown(bi.Date), bi.GoVersion, bi.OS, bi.Arch))
-		b.WriteString("\n" + hintStyle.Render("esc volver · q salir"))
+	width := m.width
+	if width == 0 {
+		width = 80
 	}
+	t := m.top()
+	title := ""
+	if t != nil {
+		title = t.Title()
+	}
+	var b strings.Builder
+	b.WriteString(m.header(title, width) + "\n\n")
+	body := ""
+	switch {
+	case m.checking:
+		body = "Comprobando la sesión…"
+	case t != nil:
+		body = t.View(width, m.bodyHeight())
+	}
+	b.WriteString(body)
+	// El pie va al final de la pantalla.
+	used := 2 + strings.Count(body, "\n") + 1
+	if m.height > 0 {
+		for ; used < m.height-2; used++ {
+			b.WriteString("\n")
+		}
+	}
+	b.WriteString("\n" + m.statusLine(width))
+	help := "q salir"
+	if t != nil {
+		help = t.Help()
+	}
+	b.WriteString("\n" + hintStyle.Render(truncate(help, width)))
 	return b.String()
 }
 
-// statusLabel no depende solo del color: el texto distingue el estado aun
-// sin colores.
-func statusLabel(s admin.Status) string {
-	switch s {
-	case admin.StatusOK:
-		return okStyle.Render("[ OK ]")
-	case admin.StatusWarn:
-		return warnStyle.Render("[WARN]")
-	default:
-		return failStyle.Render("[FAIL]")
+// header muestra el producto, la pantalla y, a la derecha, quién y dónde.
+func (m Model) header(title string, width int) string {
+	left := titleStyle.Render("BalanzaPro") + " " + hintStyle.Render(m.app.opts.Build.Version)
+	if title != "" {
+		left += "  " + sectionStyle.Render(title)
 	}
+	right := ""
+	if s := m.app.session; s != nil {
+		right = fmt.Sprintf("%s · %s/%s", s.Username, s.Company, s.Branch)
+	}
+	gap := width - visibleLen(left) - visibleLen(right)
+	if right == "" || gap < 2 {
+		return left
+	}
+	return left + strings.Repeat(" ", gap) + hintStyle.Render(right)
 }
 
-func orUnknown(s string) string {
-	if s == "" {
-		return "desconocido"
+func (m Model) statusLine(width int) string {
+	if m.status == "" {
+		return ""
 	}
-	return s
+	if m.statusErr {
+		return failStyle.Render(truncate(m.status, width))
+	}
+	return okStyle.Render(truncate(m.status, width))
 }

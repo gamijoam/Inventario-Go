@@ -105,6 +105,7 @@ Vea [Usuarios y permisos](usuarios-y-permisos.md).
 
 ### 6. Pantalla interactiva
 
-Sin argumentos, `.\balanzapro.exe` abre la TUI. Por ahora solo trae
-diagnóstico y versión; las pantallas de cada módulo llegan en los próximos
-releases.
+Sin argumentos, `.\balanzapro.exe` abre la TUI: inicie sesión (o entra
+directo si ya lo hizo con `auth login`), y consulte productos, existencias y
+kardex, precios, y apruebe o rechace la propuesta PP-000002. Vea
+[Pantalla interactiva](tui.md).
