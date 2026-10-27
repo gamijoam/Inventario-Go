@@ -60,9 +60,9 @@ func (p *pricesScreen) Title() string {
 func (p *pricesScreen) Capturing() bool { return p.list.capturing() }
 func (p *pricesScreen) Help() string {
 	if p.list.capturing() {
-		return "escriba para filtrar · enter fijar · esc borrar"
+		return "Escriba para filtrar  Enter Fijar  Esc Borrar"
 	}
-	return "↑/↓ mover · / filtrar · enter ver propuesta · r recargar · esc volver"
+	return "↑↓ Elegir  / Filtrar  Enter Propuesta  R Recargar  Esc Volver"
 }
 
 func (p *pricesScreen) Init(id int) tea.Cmd {
@@ -160,9 +160,9 @@ func (p *proposalsScreen) Title() string {
 func (p *proposalsScreen) Capturing() bool { return p.list.capturing() }
 func (p *proposalsScreen) Help() string {
 	if p.list.capturing() {
-		return "escriba para filtrar · enter fijar · esc borrar"
+		return "Escriba para filtrar  Enter Fijar  Esc Borrar"
 	}
-	return "↑/↓ mover · / filtrar · enter abrir · t pendientes/todas · r recargar · esc volver"
+	return "↑↓ Elegir  / Filtrar  Enter Abrir  T Pendientes/Todas  R Recargar  Esc Volver"
 }
 
 func (p *proposalsScreen) Init(id int) tea.Cmd {
@@ -252,9 +252,9 @@ func (p *proposalScreen) canDecide() bool {
 
 func (p *proposalScreen) Help() string {
 	if p.canDecide() {
-		return "a aprobar · x rechazar · r recargar · esc volver"
+		return "A Aprobar  X Rechazar  R Recargar  Esc Volver"
 	}
-	return "r recargar · esc volver"
+	return "R Recargar  Esc Volver"
 }
 
 func (p *proposalScreen) Init(id int) tea.Cmd {
@@ -371,7 +371,7 @@ func newApprove(a *app, v apppricing.ProposalView) screen {
 
 func (s *approveScreen) Title() string { return "Aprobar " + s.v.Number }
 func (s *approveScreen) Help() string {
-	return "tab cambiar de campo · enter confirmar · esc cancelar"
+	return "Tab Campo  Enter Confirmar  Esc Cancelar"
 }
 func (s *approveScreen) Capturing() bool { return true }
 
@@ -463,7 +463,7 @@ func newReject(a *app, v apppricing.ProposalView) screen {
 }
 
 func (s *rejectScreen) Title() string   { return "Rechazar " + s.v.Number }
-func (s *rejectScreen) Help() string    { return "enter confirmar · esc cancelar" }
+func (s *rejectScreen) Help() string    { return "Enter Confirmar  Esc Cancelar" }
 func (s *rejectScreen) Capturing() bool { return true }
 func (s *rejectScreen) Init(id int) tea.Cmd {
 	s.id = id

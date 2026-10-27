@@ -35,6 +35,30 @@ borre esa carpeta.
 
 En Linux es igual con el `.tar.gz`: `tar xzf …` y `./balanzapro`.
 
+## Probar con la pantalla interactiva
+
+Haga doble clic en `balanzapro.exe` o, en Windows Terminal, ejecútelo sin
+argumentos:
+
+```powershell
+.\balanzapro.exe
+```
+
+1. **Configuración inicial.** La primera vez se abre el asistente: escriba
+   el nombre del negocio (p. ej. `Bodega Ana`), el RIF si quiere, elija la
+   moneda con ←/→ y ponga dos veces la contraseña del administrador. Con
+   **Enter** en el último campo queda todo creado y con la sesión iniciada.
+2. **Productos.** Menú *Inventario → Productos*, **F2**: cree
+   `Harina de maíz 1 kg` con SKU `HARINA`; otra vez **F2** para
+   `Queso blanco` con SKU `QUESO` y unidad `KG` (←/→ en el campo Unidad).
+   **F3** edita y **F4** inactiva.
+3. **Unidades.** *Inventario → Unidades de medida*, **F2**: cree `SACO`
+   con 0 decimales.
+
+Vea [Pantalla interactiva](tui.md) para todas las teclas. Las existencias,
+compras, tasas y listas de precios se registran por ahora con los comandos
+de abajo; luego se consultan y aprueban en la TUI.
+
 ## Probar de punta a punta
 
 Los comandos van en PowerShell desde la carpeta del ejecutable. Agregue
@@ -42,6 +66,8 @@ Los comandos van en PowerShell desde la carpeta del ejecutable. Agregue
 scripts.
 
 ### 1. Configurar el negocio
+
+Si no usó el asistente de la TUI:
 
 ```powershell
 .\balanzapro.exe setup --name "Bodega Ana" --rif J-12345678-9
@@ -52,9 +78,16 @@ iniciada. Vea [Primeros pasos](primeros-pasos.md).
 
 ### 2. Productos y existencia inicial
 
+Si no creó los productos en la TUI:
+
 ```powershell
 .\balanzapro.exe product create --name "Harina de maíz 1 kg" --sku HARINA
 .\balanzapro.exe product create --name "Queso blanco" --sku QUESO --unit KG
+```
+
+La existencia inicial:
+
+```powershell
 .\balanzapro.exe inventory in --product HARINA --qty 20 --unit-cost 1.10 --reason initial_load
 .\balanzapro.exe inventory stock
 ```
@@ -103,9 +136,9 @@ que puede aprobar, ajustar, programar o rechazar. Vea
 Para volver como administrador: `.\balanzapro.exe auth login --user admin`.
 Vea [Usuarios y permisos](usuarios-y-permisos.md).
 
-### 6. Pantalla interactiva
+### 6. De vuelta en la pantalla interactiva
 
-Sin argumentos, `.\balanzapro.exe` abre la TUI: inicie sesión (o entra
-directo si ya lo hizo con `auth login`), y consulte productos, existencias y
-kardex, precios, y apruebe o rechace la propuesta PP-000002. Vea
-[Pantalla interactiva](tui.md).
+Abra `.\balanzapro.exe` (entra directo si la sesión sigue iniciada) y
+consulte *Inventario → Existencias y kardex*, *Precios → Precios vigentes*,
+y apruebe o rechace la propuesta PP-000002 en *Precios → Propuestas de
+precio* (**A** aprueba, **X** rechaza). Vea [Pantalla interactiva](tui.md).

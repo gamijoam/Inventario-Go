@@ -13,14 +13,12 @@ import (
 )
 
 var (
-	titleStyle    = lipgloss.NewStyle().Bold(true).Foreground(lipgloss.Color("#5FAFFF"))
-	sectionStyle  = lipgloss.NewStyle().Bold(true)
-	selectedStyle = lipgloss.NewStyle().Bold(true).Reverse(true)
-	hintStyle     = lipgloss.NewStyle().Faint(true)
-	labelStyle    = lipgloss.NewStyle().Faint(true)
-	okStyle       = lipgloss.NewStyle().Foreground(lipgloss.Color("#5FD75F"))
-	warnStyle     = lipgloss.NewStyle().Foreground(lipgloss.Color("#FFD75F"))
-	failStyle     = lipgloss.NewStyle().Bold(true).Foreground(lipgloss.Color("#FF5F5F"))
+	sectionStyle = lipgloss.NewStyle().Bold(true).Foreground(lipgloss.Color("#FFFF55"))
+	hintStyle    = lipgloss.NewStyle().Faint(true)
+	labelStyle   = lipgloss.NewStyle().Faint(true)
+	okStyle      = lipgloss.NewStyle().Bold(true).Foreground(lipgloss.Color("#55FF55"))
+	warnStyle    = lipgloss.NewStyle().Bold(true).Foreground(lipgloss.Color("#FFFF55"))
+	failStyle    = lipgloss.NewStyle().Bold(true).Foreground(lipgloss.Color("#FF5555"))
 )
 
 // tableStyles marca la fila elegida con inversión: se distingue también
@@ -29,24 +27,13 @@ func tableStyles() table.Styles {
 	s := table.DefaultStyles()
 	s.Header = s.Header.Bold(true).Padding(0, 1)
 	s.Cell = s.Cell.Padding(0, 1)
-	s.Selected = lipgloss.NewStyle().Bold(true).Reverse(true)
+	s.Header = s.Header.Foreground(lipgloss.Color("#FFFF55"))
+	s.Selected = pickedStyle
 	return s
 }
 
 // visibleLen es el ancho en pantalla sin secuencias de estilo.
 func visibleLen(s string) int { return lipgloss.Width(s) }
-
-// truncate corta s a width columnas con "…".
-func truncate(s string, width int) string {
-	if width <= 0 || visibleLen(s) <= width {
-		return s
-	}
-	r := []rune(s)
-	for len(r) > 0 && visibleLen(string(r))+1 > width {
-		r = r[:len(r)-1]
-	}
-	return string(r) + "…"
-}
 
 // describe traduce un error del backend a un mensaje para la barra de
 // estado.

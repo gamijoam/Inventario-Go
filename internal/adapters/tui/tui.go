@@ -9,7 +9,6 @@ import (
 	"context"
 	"fmt"
 	"io"
-	"strings"
 
 	tea "charm.land/bubbletea/v2"
 	"github.com/charmbracelet/colorprofile"
@@ -34,6 +33,9 @@ type Options struct {
 	// entonces solo hay diagnóstico y versión, y Unavailable explica por qué.
 	Backend     Backend
 	Unavailable string
+	// Setup, si no es nil, es que la instalación no está configurada: la TUI
+	// abre el asistente de primer uso.
+	Setup Setup
 }
 
 // Run inicia la TUI y bloquea hasta que el usuario sale o ctx se cancela.
@@ -132,6 +134,10 @@ type Model struct {
 // este equipo; si no hay, pide iniciarla.
 func New(ctx context.Context, opts Options) Model {
 	m := Model{app: &app{ctx: ctx, opts: opts}}
+	if opts.Backend == nil && opts.Setup != nil {
+		m.reset(newSetupWizard(m.app))
+		return m
+	}
 	if opts.Backend == nil {
 		m.reset(newMenu(m.app))
 		m.status, m.statusErr = opts.Unavailable, opts.Unavailable != ""
@@ -164,7 +170,7 @@ func (m *Model) open(s screen) tea.Cmd {
 	m.ids = append(m.ids, m.seq)
 	cmd := s.Init(m.seq)
 	if m.width > 0 {
-		s.Update(tea.WindowSizeMsg{Width: m.width, Height: m.bodyHeight()})
+		s.Update(m.bodySize(s))
 	}
 	return cmd
 }
@@ -176,16 +182,19 @@ func (m Model) top() screen {
 	return m.stack[len(m.stack)-1]
 }
 
-// bodyHeight descuenta la cabecera (2 líneas) y el pie (2 líneas).
-func (m Model) bodyHeight() int { return max(m.height-4, 1) }
+// bodySize es el área de trabajo de una pantalla dentro del marco: sin la
+// barra de menús, el título, el estado, las teclas ni el panel de ayuda.
+func (m Model) bodySize(s screen) tea.WindowSizeMsg {
+	l := newLayout(m.width, m.height, s)
+	return tea.WindowSizeMsg{Width: l.contentW, Height: max(l.contentH-2, 1)}
+}
 
 func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 	switch msg := msg.(type) {
 	case tea.WindowSizeMsg:
 		m.width, m.height = msg.Width, msg.Height
-		body := tea.WindowSizeMsg{Width: msg.Width, Height: m.bodyHeight()}
 		for _, s := range m.stack {
-			s.Update(body)
+			s.Update(m.bodySize(s))
 		}
 		return m, nil
 	case sessionMsg:
@@ -282,64 +291,38 @@ func (m Model) render() string {
 		return fmt.Sprintf("Terminal demasiado pequeña (%dx%d).\nMínimo %dx%d. Agrande la ventana o pulse q para salir.",
 			m.width, m.height, MinWidth, MinHeight)
 	}
-	width := m.width
-	if width == 0 {
-		width = 80
+	w, h := m.width, m.height
+	if w == 0 {
+		w, h = 80, 24
 	}
-	t := m.top()
-	title := ""
-	if t != nil {
-		title = t.Title()
+	f := frame{l: newLayout(w, h, m.top()), keys: "q Salir"}
+	if s := m.app.session; s != nil {
+		f.right = fmt.Sprintf("%s · %s/%s", s.Username, s.Company, s.Branch)
 	}
-	var b strings.Builder
-	b.WriteString(m.header(title, width) + "\n\n")
-	body := ""
-	switch {
-	case m.checking:
-		body = "Comprobando la sesión…"
-	case t != nil:
-		body = t.View(width, m.bodyHeight())
-	}
-	b.WriteString(body)
-	// El pie va al final de la pantalla.
-	used := 2 + strings.Count(body, "\n") + 1
-	if m.height > 0 {
-		for ; used < m.height-2; used++ {
-			b.WriteString("\n")
+	if len(m.stack) > 0 {
+		if menu, ok := m.stack[0].(*menuScreen); ok {
+			f.tabs, f.active = menu.tabNames(), menu.tab
 		}
 	}
-	b.WriteString("\n" + m.statusLine(width))
-	help := "q salir"
-	if t != nil {
-		help = t.Help()
+	switch t := m.top(); {
+	case m.checking:
+		f.title, f.content = "Inicio", "Comprobando la sesión…"
+	case t != nil:
+		bs := m.bodySize(t)
+		f.title, f.content, f.keys = t.Title(), t.View(bs.Width, bs.Height), t.Help()
+		if i, ok := t.(infoer); ok {
+			f.info = i.Info()
+		}
 	}
-	b.WriteString("\n" + hintStyle.Render(truncate(help, width)))
-	return b.String()
+	if m.status != "" {
+		if m.statusErr {
+			f.status = failStyle.Render(m.status)
+		} else {
+			f.status = okStyle.Render(m.status)
+		}
+	}
+	return f.render()
 }
 
-// header muestra el producto, la pantalla y, a la derecha, quién y dónde.
-func (m Model) header(title string, width int) string {
-	left := titleStyle.Render("BalanzaPro") + " " + hintStyle.Render(m.app.opts.Build.Version)
-	if title != "" {
-		left += "  " + sectionStyle.Render(title)
-	}
-	right := ""
-	if s := m.app.session; s != nil {
-		right = fmt.Sprintf("%s · %s/%s", s.Username, s.Company, s.Branch)
-	}
-	gap := width - visibleLen(left) - visibleLen(right)
-	if right == "" || gap < 2 {
-		return left
-	}
-	return left + strings.Repeat(" ", gap) + hintStyle.Render(right)
-}
-
-func (m Model) statusLine(width int) string {
-	if m.status == "" {
-		return ""
-	}
-	if m.statusErr {
-		return failStyle.Render(truncate(m.status, width))
-	}
-	return okStyle.Render(truncate(m.status, width))
-}
+// infoer es una pantalla con texto para el panel de ayuda.
+type infoer interface{ Info() string }

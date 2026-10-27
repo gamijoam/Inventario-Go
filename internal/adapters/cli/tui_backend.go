@@ -9,6 +9,7 @@ import (
 	appcatalog "github.com/gamijoam/inventario-go/internal/application/catalog"
 	apppricing "github.com/gamijoam/inventario-go/internal/application/pricing"
 	"github.com/gamijoam/inventario-go/internal/application/stock"
+	"github.com/gamijoam/inventario-go/internal/domain/catalog"
 	"github.com/gamijoam/inventario-go/internal/domain/identity"
 	"github.com/gamijoam/inventario-go/internal/domain/inventory"
 	"github.com/gamijoam/inventario-go/internal/domain/pricing"
@@ -159,4 +160,40 @@ func (b *tuiBackend) Reject(ctx context.Context, ref, note string) (apppricing.P
 		return apppricing.ProposalView{}, err
 	}
 	return b.s.price.Reject(ctx, p, ref, note)
+}
+
+func (b *tuiBackend) CreateProduct(ctx context.Context, in appcatalog.NewProduct) (appcatalog.ProductView, error) {
+	ctx, cancel, p, err := b.call(ctx)
+	defer cancel()
+	if err != nil {
+		return appcatalog.ProductView{}, err
+	}
+	return b.s.cat.CreateProduct(ctx, p, b.s.cur.Organization, in)
+}
+
+func (b *tuiBackend) UpdateProduct(ctx context.Context, ref string, c appcatalog.Changes) (appcatalog.ProductView, error) {
+	ctx, cancel, p, err := b.call(ctx)
+	defer cancel()
+	if err != nil {
+		return appcatalog.ProductView{}, err
+	}
+	return b.s.cat.UpdateProduct(ctx, p, b.s.cur.Organization, ref, c)
+}
+
+func (b *tuiBackend) Units(ctx context.Context) ([]catalog.Unit, error) {
+	ctx, cancel, p, err := b.call(ctx)
+	defer cancel()
+	if err != nil {
+		return nil, err
+	}
+	return b.s.cat.ListUnits(ctx, p)
+}
+
+func (b *tuiBackend) CreateUnit(ctx context.Context, code, name string, scale int32) (catalog.Unit, error) {
+	ctx, cancel, p, err := b.call(ctx)
+	defer cancel()
+	if err != nil {
+		return catalog.Unit{}, err
+	}
+	return b.s.cat.CreateUnit(ctx, p, b.s.cur.Organization, code, name, scale)
 }

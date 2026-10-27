@@ -8,8 +8,11 @@ import (
 
 	"github.com/gamijoam/inventario-go/internal/adapters/cli"
 	"github.com/gamijoam/inventario-go/internal/adapters/tui"
+	appcatalog "github.com/gamijoam/inventario-go/internal/application/catalog"
+	apporg "github.com/gamijoam/inventario-go/internal/application/org"
 	apppricing "github.com/gamijoam/inventario-go/internal/application/pricing"
 	"github.com/gamijoam/inventario-go/internal/application/stock"
+	"github.com/gamijoam/inventario-go/internal/domain/catalog"
 	"github.com/gamijoam/inventario-go/internal/domain/identity"
 	"github.com/gamijoam/inventario-go/internal/domain/pricing"
 )
@@ -93,15 +96,72 @@ func TestTUIBackendUsesTheRealServices(t *testing.T) {
 	}
 }
 
-func TestTUIWithoutSetupExplainsWhy(t *testing.T) {
+// Sin instalación, la TUI recibe el asistente de primer uso: crea la base,
+// la organización y el administrador, y deja la sesión iniciada también
+// para los comandos.
+func TestTUISetupWizardInstalls(t *testing.T) {
 	o, _ := sqliteEnv(t)
 	o.interactive = true
 	o.tui = func(opts tui.Options) {
-		if opts.Backend != nil || !strings.Contains(opts.Unavailable, "balanzapro setup") {
-			t.Errorf("sin setup: backend=%v %q", opts.Backend != nil, opts.Unavailable)
+		ctx := context.Background()
+		if opts.Backend != nil || opts.Setup == nil || opts.Unavailable != "" {
+			t.Fatalf("sin instalación: backend=%v setup=%v %q", opts.Backend != nil, opts.Setup != nil, opts.Unavailable)
+		}
+		if _, err := opts.Setup(ctx, tui.SetupInput{BusinessName: "Bodega Ana", Currency: "USD", AdminUser: "admin",
+			AdminName: "Ana", Password: "corta"}); err == nil {
+			t.Fatal("contraseña corta aceptada")
+		}
+		b, err := opts.Setup(ctx, tui.SetupInput{BusinessName: "Bodega Ana", RIF: "J-12345678-9", Currency: "USD",
+			AdminName: "Ana", Password: adminPassword})
+		if err != nil {
+			t.Fatalf("setup: %v", err)
+		}
+		s, err := b.Resume(ctx)
+		if err != nil || s.Username != "admin" || s.DisplayName != "Ana" || s.Company != "PRINCIPAL" || s.Branch != "PRINCIPAL" {
+			t.Fatalf("sesión tras el asistente: %+v %v", s, err)
+		}
+
+		// Catálogo completo desde la TUI.
+		units, err := b.Units(ctx)
+		if err != nil || len(units) == 0 {
+			t.Fatalf("unidades: %+v %v", units, err)
+		}
+		if u, err := b.CreateUnit(ctx, "SACO", "Saco de 45 kg", 3); err != nil || u.Code != "SACO" || u.Scale != 3 {
+			t.Fatalf("unidad: %+v %v", u, err)
+		}
+		if _, err := b.CreateUnit(ctx, "SACO", "Otro", 0); !errors.Is(err, apporg.ErrConflict) {
+			t.Errorf("unidad repetida: %v", err)
+		}
+		p, err := b.CreateProduct(ctx, appcatalog.NewProduct{Name: "Café 500 g", UnitCode: "KG", Barcodes: []string{"7591234567894"}})
+		if err != nil || p.SKU.String() != "P-000001" || p.Unit.Code != "KG" || len(p.Barcodes) != 1 {
+			t.Fatalf("producto: %+v %v", p, err)
+		}
+		name := "Café molido 500 g"
+		p2, err := b.UpdateProduct(ctx, p.ID.String(), appcatalog.Changes{Name: &name, RemoveBarcodes: []string{"7591234567894"}, ExpectedRevision: p.Revision})
+		if err != nil || p2.Name.String() != name || len(p2.Barcodes) != 0 {
+			t.Fatalf("editar: %+v %v", p2, err)
+		}
+		off := false
+		if _, err := b.UpdateProduct(ctx, p.ID.String(), appcatalog.Changes{Active: &off, ExpectedRevision: p.Revision}); !errors.Is(err, appcatalog.ErrStale) {
+			t.Errorf("una revisión vieja no debe guardarse: %v", err)
+		}
+		if p3, err := b.UpdateProduct(ctx, p.ID.String(), appcatalog.Changes{Active: &off, ExpectedRevision: p2.Revision}); err != nil || p3.Status != catalog.StatusInactive {
+			t.Fatalf("inactivar: %+v %v", p3, err)
 		}
 	}
 	if r := run(t, o); r.code != cli.ExitOK {
 		t.Fatalf("tui: %d %s", r.code, r.stderr)
 	}
+	// La instalación y la sesión valen para los comandos.
+	r := run(t, o, "product", "list", "--all")
+	if r.code != cli.ExitOK || !strings.Contains(r.stdout, "Café molido 500 g") {
+		t.Fatalf("product list tras el asistente: %d %s %s", r.code, r.stdout, r.stderr)
+	}
+	// Ya instalada, la TUI no vuelve a ofrecer el asistente.
+	o.tui = func(opts tui.Options) {
+		if opts.Backend == nil || opts.Setup != nil {
+			t.Errorf("instalada: backend=%v setup=%v", opts.Backend != nil, opts.Setup != nil)
+		}
+	}
+	run(t, o)
 }

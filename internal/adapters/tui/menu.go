@@ -15,98 +15,127 @@ import (
 
 type menuItem struct {
 	label string
-	perm  identity.Permission // vacío: siempre visible
+	info  string              // texto del panel de ayuda
+	perm  identity.Permission // vacío: siempre visible; "session": con sesión
 	open  func(*app) screen
 	run   func(*app) tea.Cmd
 }
 
-// menuItems son las opciones del menú; las de módulos solo aparecen con
-// sesión y con el permiso de lectura correspondiente.
-var menuItems = []menuItem{
-	{label: "Productos", perm: identity.PermProductRead, open: newProducts},
-	{label: "Existencias", perm: identity.PermStockRead, open: func(a *app) screen { return newStock(a, "") }},
-	{label: "Precios", perm: identity.PermPriceRead, open: newPrices},
-	{label: "Propuestas de precio", perm: identity.PermPriceRead, open: newProposals},
-	{label: "Diagnóstico", open: newDoctor},
-	{label: "Versión", open: newVersion},
-	{label: "Cerrar sesión", perm: "session", run: logout},
-	{label: "Salir", run: func(*app) tea.Cmd { return tea.Quit }},
+type menuTab struct {
+	name  string
+	items []menuItem
+}
+
+// menuTabs son los menús de la barra superior. Una opción aparece con
+// sesión y con el permiso de lectura de su módulo; un menú sin opciones no
+// aparece.
+var menuTabs = []menuTab{
+	{"Inventario", []menuItem{
+		{label: "Productos", perm: identity.PermProductRead, open: newProducts,
+			info: "Catálogo de productos: alta (F2), edición y códigos de barras (F3), activar o inactivar (F4). Enter abre sus existencias."},
+		{label: "Unidades de medida", perm: identity.PermProductRead, open: newUnits,
+			info: "Unidades con sus decimales (UND, KG, LT…). F2 crea una nueva."},
+		{label: "Existencias y kardex", perm: identity.PermStockRead, open: func(a *app) screen { return newStock(a, "") },
+			info: "Física, reservada, bloqueada y disponible por almacén, con costo promedio y valor. Enter abre el kardex."},
+	}},
+	{"Precios", []menuItem{
+		{label: "Precios vigentes", perm: identity.PermPriceRead, open: newPrices,
+			info: "Precio vigente por lista, el programado y la propuesta pendiente."},
+		{label: "Propuestas de precio", perm: identity.PermPriceRead, open: newProposals,
+			info: "Propuestas pendientes de aprobación: las que deja cada compra y las manuales. Aprobar exige permiso."},
+	}},
+	{"Sistema", []menuItem{
+		{label: "Diagnóstico", open: newDoctor, info: "Verifica configuración, base de datos, zona horaria y aritmética exacta."},
+		{label: "Versión", open: newVersion, info: "Versión, commit y fecha de compilación."},
+		{label: "Cerrar sesión", perm: "session", run: logout, info: "Cierra la sesión en este equipo, también para los comandos."},
+		{label: "Salir", run: func(*app) tea.Cmd { return tea.Quit }, info: "Cierra BalanzaPro."},
+	}},
 }
 
 type menuScreen struct {
 	app    *app
-	items  []menuItem
+	tabs   []menuTab
+	tab    int
 	cursor int
 }
 
 func newMenu(a *app) screen {
 	m := &menuScreen{app: a}
-	for _, it := range menuItems {
-		switch {
-		case it.perm == "":
-		case a.session == nil:
-			continue
-		case it.perm == "session":
-		case !a.session.Can(it.perm):
-			continue
+	for _, t := range menuTabs {
+		var items []menuItem
+		for _, it := range t.items {
+			switch {
+			case it.perm == "":
+			case a.session == nil:
+				continue
+			case it.perm == "session":
+			case !a.session.Can(it.perm):
+				continue
+			}
+			items = append(items, it)
 		}
-		m.items = append(m.items, it)
+		if len(items) > 0 {
+			m.tabs = append(m.tabs, menuTab{t.name, items})
+		}
 	}
 	return m
 }
+
+func (m *menuScreen) tabNames() []string {
+	out := make([]string, len(m.tabs))
+	for i, t := range m.tabs {
+		out[i] = t.name
+	}
+	return out
+}
+
+func (m *menuScreen) items() []menuItem { return m.tabs[m.tab].items }
 
 func logout(a *app) tea.Cmd {
 	return func() tea.Msg { return loggedOutMsg{a.opts.Backend.Logout(a.ctx)} }
 }
 
-func (m *menuScreen) Title() string { return "" }
-func (m *menuScreen) Help() string {
-	return "↑/↓ mover · enter abrir · 1-9 ir directo · q salir"
-}
-func (m *menuScreen) Init(int) tea.Cmd     { return nil }
-func (m *menuScreen) Capturing() bool      { return false }
-func (m *menuScreen) View(int, int) string { return m.render() }
+func (m *menuScreen) Title() string    { return m.tabs[m.tab].name }
+func (m *menuScreen) Info() string     { return m.items()[m.cursor].info }
+func (m *menuScreen) Help() string     { return "←→ Menú  ↑↓ Elegir  Enter Abrir  Esc/q Salir" }
+func (m *menuScreen) Init(int) tea.Cmd { return nil }
+func (m *menuScreen) Capturing() bool  { return false }
 
 func (m *menuScreen) Update(msg tea.Msg) tea.Cmd {
 	key, ok := msg.(tea.KeyPressMsg)
 	if !ok {
 		return nil
 	}
-	switch k := key.String(); k {
+	n := len(m.items())
+	switch key.String() {
+	case "left", "h", "shift+tab":
+		m.tab, m.cursor = (m.tab-1+len(m.tabs))%len(m.tabs), 0
+	case "right", "l", "tab":
+		m.tab, m.cursor = (m.tab+1)%len(m.tabs), 0
 	case "up", "k":
-		m.cursor = (m.cursor - 1 + len(m.items)) % len(m.items)
-	case "down", "j", "tab":
-		m.cursor = (m.cursor + 1) % len(m.items)
-	case "enter", "right", "l":
-		return m.choose(m.cursor)
-	default:
-		if len(k) == 1 && k[0] >= '1' && k[0] <= '9' && int(k[0]-'1') < len(m.items) {
-			m.cursor = int(k[0] - '1')
-			return m.choose(m.cursor)
+		m.cursor = (m.cursor - 1 + n) % n
+	case "down", "j":
+		m.cursor = (m.cursor + 1) % n
+	case "enter":
+		it := m.items()[m.cursor]
+		if it.run != nil {
+			return it.run(m.app)
 		}
+		return push(it.open(m.app))
 	}
 	return nil
 }
 
-func (m *menuScreen) choose(i int) tea.Cmd {
-	it := m.items[i]
-	if it.run != nil {
-		return it.run(m.app)
-	}
-	return push(it.open(m.app))
-}
-
-func (m *menuScreen) render() string {
+func (m *menuScreen) View(int, int) string {
 	var b strings.Builder
-	if s := m.app.session; s != nil {
-		b.WriteString(fmt.Sprintf("Hola, %s.\n\n", s.DisplayName))
+	if s := m.app.session; s != nil && m.tab == 0 {
+		b.WriteString("Hola, " + s.DisplayName + ".\n\n")
 	}
-	for i, it := range m.items {
-		line := fmt.Sprintf("%d. %s", i+1, it.label)
+	for i, it := range m.items() {
 		if i == m.cursor {
-			b.WriteString(selectedStyle.Render("> "+line) + "\n")
+			b.WriteString(pickedStyle.Render(" ► "+it.label+" ") + "\n")
 		} else {
-			b.WriteString("  " + line + "\n")
+			b.WriteString("   " + it.label + "\n")
 		}
 	}
 	return strings.TrimRight(b.String(), "\n")
@@ -132,7 +161,7 @@ func newLogin(a *app) screen {
 }
 
 func (l *loginScreen) Title() string   { return "Iniciar sesión" }
-func (l *loginScreen) Help() string    { return "tab cambiar de campo · enter entrar · ctrl+c salir" }
+func (l *loginScreen) Help() string    { return "Tab Campo  Enter Entrar  Esc Salir" }
 func (l *loginScreen) Capturing() bool { return true }
 
 func (l *loginScreen) Init(int) tea.Cmd {
@@ -221,7 +250,7 @@ type doctorScreen struct {
 func newDoctor(a *app) screen { return &doctorScreen{app: a} }
 
 func (d *doctorScreen) Title() string   { return "Diagnóstico" }
-func (d *doctorScreen) Help() string    { return "r repetir · esc volver · q salir" }
+func (d *doctorScreen) Help() string    { return "R Repetir  Esc Volver  Q Salir" }
 func (d *doctorScreen) Capturing() bool { return false }
 
 func (d *doctorScreen) Init(id int) tea.Cmd {
@@ -282,7 +311,7 @@ type versionScreen struct{ app *app }
 func newVersion(a *app) screen { return &versionScreen{app: a} }
 
 func (v *versionScreen) Title() string          { return "Versión" }
-func (v *versionScreen) Help() string           { return "esc volver · q salir" }
+func (v *versionScreen) Help() string           { return "Esc Volver  Q Salir" }
 func (v *versionScreen) Init(int) tea.Cmd       { return nil }
 func (v *versionScreen) Update(tea.Msg) tea.Cmd { return nil }
 func (v *versionScreen) Capturing() bool        { return false }
