@@ -5,7 +5,7 @@ Go, operado primero por CLI y TUI, con SQLite para una PC y PostgreSQL para
 multicaja y nube. El alcance aprobado es **V1.CLI**, entregado por hitos M0–M6
 (ver `BalanzaPro_Documento_Maestro_Go_v2.2`, sección 28).
 
-> **Estado:** M0 completo (salvo la prerelease); M1 completo; M2 en curso — existencias y kardex (`BP-M2-001`). M1: organización, empresas, sucursales y almacenes (`BP-M1-001`); usuarios y permisos por ámbito (`BP-M1-002`); catálogo de productos y unidades (`BP-M1-003`). No apto para producción.
+> **Estado:** M0 completo (salvo la prerelease); M1 completo; M2 en curso — existencias y kardex (`BP-M2-001`); costo promedio por almacén y transferencias (`BP-M2-002`). M1: organización, empresas, sucursales y almacenes (`BP-M1-001`); usuarios y permisos por ámbito (`BP-M1-002`); catálogo de productos y unidades (`BP-M1-003`). No apto para producción.
 
 ## Qué contiene hoy
 
@@ -50,13 +50,13 @@ balanzapro config show [--json]
 balanzapro config path
 balanzapro db status [--json]     # no crea ni modifica la base
 balanzapro db migrate [--json]    # crea la base y aplica migraciones
-balanzapro setup --name "Bodega Ana" [--legal-name ...] [--rif J-12345678-9]   # pide la contraseña del administrador
+balanzapro setup --name "Bodega Ana" [--legal-name ...] [--rif J-12345678-9] [--currency USD|VES]   # pide la contraseña del administrador
 balanzapro auth login|logout|whoami|passwd
 balanzapro user list|create|assign|unassign|disable|enable|unlock|reset-password
 balanzapro role list|permissions|create|edit
 balanzapro unit list|create
 balanzapro product create|list|show|update
-balanzapro inventory in|out|reverse|stock|kardex|verify|reasons
+balanzapro inventory in|out|reverse|transfer|stock|kardex|verify|reasons
 balanzapro org list
 balanzapro company list|create
 balanzapro branch list|create
@@ -138,7 +138,7 @@ scripts/              verificaciones de CI
 - [Primeros pasos](docs/user-guide/primeros-pasos.md): instalación, `setup` y estructura del negocio.
 - [Usuarios y permisos](docs/user-guide/usuarios-y-permisos.md): sesión, usuarios, roles y ámbitos.
 - [Catálogo](docs/user-guide/catalogo.md): productos, SKU, códigos de barras y unidades.
-- [Inventario](docs/user-guide/inventario.md): existencias, ajustes, reversos y kardex.
+- [Inventario](docs/user-guide/inventario.md): existencias, ajustes, reversos, kardex, costo promedio y transferencias.
 - [Configuración](docs/user-guide/configuracion.md): archivo, variables y logs.
 - [Contribuir](CONTRIBUTING.md): ramas, commits, TDD y puerta de calidad.
 - [Decisiones técnicas (ADR)](docs/decisions/README.md).

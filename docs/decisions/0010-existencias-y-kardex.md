@@ -69,8 +69,9 @@ equivoque.
 
 ## Consecuencias
 
-- BP-M2-002 agregará costo a los movimientos (CPP por almacén) y
-  transferencias; BP-M2-003, reservas, bloqueos, conteos y la política de
-  negativos, usando las columnas `reserved` y `blocked` ya existentes.
+- BP-M2-002 agregó costo a los movimientos (CPP por almacén) y
+  transferencias (ADR-0011); BP-M2-003 agregará reservas, bloqueos, conteos
+  y la política de negativos, usando las columnas `reserved` y `blocked` ya
+  existentes.
 - `doctor` todavía no ejecuta `inventory verify`; pendiente para cuando el
   diagnóstico tenga sesión o un modo técnico sin datos de negocio.

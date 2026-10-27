@@ -16,5 +16,6 @@ registran cómo se implementan.
 | [0008](0008-identidad-y-rbac.md) | Usuarios, contraseñas, sesiones y permisos por ámbito | Aceptada |
 | [0009](0009-catalogo-basico.md) | Catálogo básico: productos, SKU, códigos de barras y unidades | Aceptada |
 | [0010](0010-existencias-y-kardex.md) | Existencias y kardex inmutable | Aceptada |
+| [0011](0011-costo-promedio-y-transferencias.md) | Costo promedio ponderado por almacén y transferencias | Aceptada |
 
 Estados posibles: *Propuesta*, *Aceptada*, *Reemplazada por ADR-xxxx*, *Rechazada*.

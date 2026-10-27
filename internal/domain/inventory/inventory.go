@@ -1,5 +1,6 @@
 // Package inventory modela saldos de existencia y el kardex de movimientos
-// por producto y almacén (DEC-007.F, secciones 23.2 y 24.3).
+// por producto y almacén (DEC-007.F, secciones 23.2 y 24.3), con su
+// valoración a costo promedio ponderado móvil (DEC-007.E1/E2, BP-M2-002).
 //
 // El kardex es la fuente de verdad: cada movimiento es inmutable, lleva un
 // número de secuencia por saldo y el saldo resultante. El saldo
@@ -37,6 +38,8 @@ const (
 	KindAdjustmentIn  Kind = "adjustment_in"
 	KindAdjustmentOut Kind = "adjustment_out"
 	KindReversal      Kind = "reversal"
+	KindTransferOut   Kind = "transfer_out"
+	KindTransferIn    Kind = "transfer_in"
 )
 
 // Reason es el motivo de un ajuste, de un catálogo fijo (ratificado
@@ -51,6 +54,8 @@ const (
 	ReasonOther       Reason = "other"
 	// ReasonReversal es exclusivo de los movimientos de reverso.
 	ReasonReversal Reason = "reversal"
+	// ReasonTransfer es exclusivo de las dos patas de una transferencia.
+	ReasonTransfer Reason = "transfer"
 )
 
 // ReasonInfo describe un motivo y en qué dirección se admite.
@@ -146,6 +151,10 @@ type Key struct {
 type Balance struct {
 	Key
 	OnHand, Reserved, Blocked decimal.Decimal
+	// Value es el valor total de la existencia en la moneda de valoración de
+	// la empresa. Desconocido solo en existencia cargada antes de BP-M2-002
+	// que ninguna entrada con costo ha valorado todavía.
+	Value Amount
 	// Version es la secuencia del último movimiento aplicado.
 	Version   int64
 	UpdatedAt time.Time
@@ -163,20 +172,32 @@ type Movement struct {
 	Kind     Kind
 	Reason   Reason
 	// Quantity tiene signo: positiva entra, negativa sale.
-	Quantity       decimal.Decimal
-	OnHandAfter    decimal.Decimal
-	Note           string
-	ActorID        id.ID
-	OccurredAt     time.Time
-	ReversesID     id.ID // solo en reversos
-	IdempotencyKey string
-	RequestHash    string
+	Quantity    decimal.Decimal
+	OnHandAfter decimal.Decimal
+	// UnitCost es el costo por unidad del movimiento, informativo: el
+	// declarado en una entrada o el CPP vigente en una salida.
+	UnitCost Amount
+	// Cost es el valor de las unidades movidas, con el signo de Quantity.
+	Cost Amount
+	// ValueAdjustment es el cambio de valor que no corresponde a las
+	// unidades movidas: la valoración de existencia previa sin valor, o el
+	// resto que se lleva un costo fijo al agotar la existencia.
+	ValueAdjustment decimal.Decimal
+	ValueAfter      Amount
+	Note            string
+	ActorID         id.ID
+	OccurredAt      time.Time
+	ReversesID      id.ID // solo en reversos
+	TransferID      id.ID // solo en transferencias
+	IdempotencyKey  string
+	RequestHash     string
 }
 
-// Apply devuelve el saldo y el movimiento resultantes de sumar delta. Una
-// salida exige disponible suficiente: sin política de negativos (BP-M2-003)
-// ninguna salida deja el disponible bajo cero.
-func Apply(b Balance, m Movement, now time.Time) (Balance, Movement, error) {
+// Apply devuelve el saldo y el movimiento resultantes de sumar
+// m.Quantity, valorado según c. Una salida exige disponible suficiente: sin
+// política de negativos (BP-M2-003) ninguna salida deja el disponible bajo
+// cero.
+func Apply(b Balance, m Movement, c Costing, now time.Time) (Balance, Movement, error) {
 	if m.Quantity.IsZero() {
 		return Balance{}, Movement{}, fmt.Errorf("%w: cantidad cero", ErrInvalid)
 	}
@@ -186,19 +207,25 @@ func Apply(b Balance, m Movement, now time.Time) (Balance, Movement, error) {
 	if m.Quantity.IsNegative() && b.Available().Add(m.Quantity).IsNegative() {
 		return Balance{}, Movement{}, fmt.Errorf("%w: disponible %s, salida %s", ErrInsufficient, b.Available(), m.Quantity.Neg())
 	}
+	v, err := valuate(b, m.Quantity, c)
+	if err != nil {
+		return Balance{}, Movement{}, err
+	}
 	b.OnHand = b.OnHand.Add(m.Quantity)
+	b.Value = v.after
 	b.Version++
 	b.UpdatedAt = now.UTC()
 	m.Sequence = b.Version
 	m.OnHandAfter = b.OnHand
+	m.UnitCost, m.Cost, m.ValueAdjustment, m.ValueAfter = v.unitCost, v.cost, v.adjustment, v.after
 	return b, m, nil
 }
 
-// Replay reconstruye la existencia física a partir del kardex ordenado por
-// secuencia y la compara con el saldo guardado. Detecta huecos, saltos,
-// saldos intermedios alterados y diferencias finales.
+// Replay reconstruye la existencia y el valor a partir del kardex ordenado
+// por secuencia y los compara con el saldo guardado. Detecta huecos, saltos,
+// cantidades, costos o saldos intermedios alterados y diferencias finales.
 func Replay(b Balance, movements []Movement) error {
-	onHand := decimal.Zero()
+	onHand, value := decimal.Zero(), Amount{}
 	for i, m := range movements {
 		if m.Key != b.Key {
 			return fmt.Errorf("%w: el movimiento %s es de otro saldo", ErrReplayMismatch, m.ID)
@@ -206,16 +233,25 @@ func Replay(b Balance, movements []Movement) error {
 		if m.Sequence != int64(i+1) {
 			return fmt.Errorf("%w: se esperaba la secuencia %d y se encontró %d", ErrReplayMismatch, i+1, m.Sequence)
 		}
+		before := onHand
 		onHand = onHand.Add(m.Quantity)
 		if !onHand.Equal(m.OnHandAfter) {
 			return fmt.Errorf("%w: tras la secuencia %d el kardex suma %s pero registra %s", ErrReplayMismatch, m.Sequence, onHand, m.OnHandAfter)
 		}
+		next, err := replayValue(before, value, m)
+		if err != nil {
+			return fmt.Errorf("%w: secuencia %d: %s", ErrReplayMismatch, m.Sequence, err)
+		}
+		value = next
 	}
 	if int64(len(movements)) != b.Version {
 		return fmt.Errorf("%w: el saldo está en la versión %d y el kardex tiene %d movimientos", ErrReplayMismatch, b.Version, len(movements))
 	}
 	if !onHand.Equal(b.OnHand) {
 		return fmt.Errorf("%w: el kardex suma %s y el saldo registra %s", ErrReplayMismatch, onHand, b.OnHand)
+	}
+	if !normalized(onHand, value).Equal(normalized(b.OnHand, b.Value)) {
+		return fmt.Errorf("%w: el kardex valora %s y el saldo registra %s", ErrReplayMismatch, value, b.Value)
 	}
 	return nil
 }

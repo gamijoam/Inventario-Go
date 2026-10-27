@@ -26,6 +26,14 @@ func mv(k inventory.Key, qty string) inventory.Movement {
 	return inventory.Movement{ID: id.MustNew(), Key: k, Quantity: decimal.MustParse(qty)}
 }
 
+// cost valora las entradas a 1 por unidad y las salidas al CPP.
+func cost(qty string) inventory.Costing {
+	if qty[0] == '-' {
+		return inventory.Costing{}
+	}
+	return atUnit("1")
+}
+
 func TestApplyKeepsBalanceAndKardexInStep(t *testing.T) {
 	k := key(t)
 	b := inventory.Balance{Key: k}
@@ -33,7 +41,7 @@ func TestApplyKeepsBalanceAndKardexInStep(t *testing.T) {
 	for _, q := range []string{"10", "-3.5", "0.125", "-6.625"} {
 		var m inventory.Movement
 		var err error
-		b, m, err = inventory.Apply(b, mv(k, q), now)
+		b, m, err = inventory.Apply(b, mv(k, q), cost(q), now)
 		if err != nil {
 			t.Fatalf("%s: %v", q, err)
 		}
@@ -49,24 +57,24 @@ func TestApplyKeepsBalanceAndKardexInStep(t *testing.T) {
 
 func TestOutboundCannotExceedAvailable(t *testing.T) {
 	k := key(t)
-	b, _, _ := inventory.Apply(inventory.Balance{Key: k}, mv(k, "5"), now)
-	if _, _, err := inventory.Apply(b, mv(k, "-5.001"), now); !errors.Is(err, inventory.ErrInsufficient) {
+	b, _, _ := inventory.Apply(inventory.Balance{Key: k}, mv(k, "5"), atUnit("1"), now)
+	if _, _, err := inventory.Apply(b, mv(k, "-5.001"), cost("-5.001"), now); !errors.Is(err, inventory.ErrInsufficient) {
 		t.Fatalf("salida mayor: %v", err)
 	}
 	b.Reserved, b.Blocked = decimal.MustParse("1"), decimal.MustParse("2")
 	if b.Available().String() != "2" {
 		t.Fatalf("disponible = %s", b.Available())
 	}
-	if _, _, err := inventory.Apply(b, mv(k, "-3"), now); !errors.Is(err, inventory.ErrInsufficient) {
+	if _, _, err := inventory.Apply(b, mv(k, "-3"), cost("-3"), now); !errors.Is(err, inventory.ErrInsufficient) {
 		t.Fatalf("lo reservado y bloqueado no se puede sacar: %v", err)
 	}
-	if b2, _, err := inventory.Apply(b, mv(k, "-2"), now); err != nil || b2.OnHand.String() != "3" {
+	if b2, _, err := inventory.Apply(b, mv(k, "-2"), cost("-2"), now); err != nil || b2.OnHand.String() != "3" {
 		t.Fatalf("salida del disponible: %+v %v", b2, err)
 	}
-	if _, _, err := inventory.Apply(b, mv(k, "0"), now); !errors.Is(err, inventory.ErrInvalid) {
+	if _, _, err := inventory.Apply(b, mv(k, "0"), cost("0"), now); !errors.Is(err, inventory.ErrInvalid) {
 		t.Fatalf("cero: %v", err)
 	}
-	if _, _, err := inventory.Apply(b, mv(key(t), "1"), now); !errors.Is(err, inventory.ErrInvalid) {
+	if _, _, err := inventory.Apply(b, mv(key(t), "1"), cost("1"), now); !errors.Is(err, inventory.ErrInvalid) {
 		t.Fatalf("otro saldo: %v", err)
 	}
 }
@@ -77,7 +85,7 @@ func TestReplayDetectsTampering(t *testing.T) {
 	var kardex []inventory.Movement
 	for _, q := range []string{"10", "-4", "2"} {
 		var m inventory.Movement
-		b, m, _ = inventory.Apply(b, mv(k, q), now)
+		b, m, _ = inventory.Apply(b, mv(k, q), cost(q), now)
 		kardex = append(kardex, m)
 	}
 	clone := func() []inventory.Movement { return append([]inventory.Movement(nil), kardex...) }

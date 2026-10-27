@@ -29,8 +29,13 @@ func newStockEnv(t *testing.T, cfg config.Database) *stockEnv {
 		here: stock.WarehouseRef{Company: "principal", Branch: "principal"}}
 }
 
+// adjust valora las entradas a 1 por unidad.
 func (e *stockEnv) adjust(p identity.Principal, product string, d inventory.Direction, qty, reason string) (stock.MovementView, error) {
-	return e.stock.Adjust(ctx(e.t), p, stock.AdjustInput{Where: e.here, Product: product, Direction: d, Quantity: qty, Reason: reason})
+	in := stock.AdjustInput{Where: e.here, Product: product, Direction: d, Quantity: qty, Reason: reason}
+	if d == inventory.In {
+		in.UnitCost = "1"
+	}
+	return e.stock.Adjust(ctx(e.t), p, in)
 }
 
 func (e *stockEnv) mustAdjust(product string, d inventory.Direction, qty, reason string) stock.MovementView {
@@ -60,8 +65,8 @@ func (e *stockEnv) verify() stock.Report {
 	if err != nil {
 		e.t.Fatal(err)
 	}
-	if len(rep.Problems) != 0 {
-		e.t.Fatalf("el kardex no coincide con los saldos: %+v", rep.Problems)
+	if !rep.OK() {
+		e.t.Fatalf("el kardex no coincide con los saldos: %+v %+v", rep.Problems, rep.TransferProblems)
 	}
 	return rep
 }
@@ -165,7 +170,7 @@ func TestIdempotencyKeyAppliesOnce(t *testing.T) {
 	forEachEngine(t, func(t *testing.T, cfg config.Database) {
 		e := newStockEnv(t, cfg)
 		e.create(appcatalog.NewProduct{SKU: "A", Name: "A"})
-		in := stock.AdjustInput{Where: e.here, Product: "A", Direction: inventory.In, Quantity: "5", Reason: "initial_load", IdempotencyKey: "carga-1"}
+		in := stock.AdjustInput{Where: e.here, Product: "A", Direction: inventory.In, Quantity: "5", UnitCost: "2", Reason: "initial_load", IdempotencyKey: "carga-1"}
 		first, err := e.stock.Adjust(ctx(t), e.admin, in)
 		if err != nil || first.Replayed {
 			t.Fatal(first, err)
@@ -241,7 +246,7 @@ func TestStockPermissionsByWarehouse(t *testing.T) {
 		principal := stock.WarehouseRef{Company: "principal", Branch: "principal", Warehouse: "principal"}
 		danados := stock.WarehouseRef{Company: "principal", Branch: "principal", Warehouse: "danados"}
 		for _, w := range []stock.WarehouseRef{principal, danados} {
-			if _, err := e.stock.Adjust(c, e.admin, stock.AdjustInput{Where: w, Product: "A", Direction: inventory.In, Quantity: "3", Reason: "initial_load"}); err != nil {
+			if _, err := e.stock.Adjust(c, e.admin, stock.AdjustInput{Where: w, Product: "A", Direction: inventory.In, Quantity: "3", UnitCost: "1", Reason: "initial_load"}); err != nil {
 				t.Fatal(err)
 			}
 		}

@@ -28,6 +28,10 @@ Todo se puede renombrar con flags (`--code`, `--company-code`,
 El RIF es opcional. Se valida el formato (`J-12345678-9`, también acepta
 `j123456789`); el dígito verificador **no** se comprueba todavía.
 
+Cada empresa valora su inventario en una moneda: USD por defecto, o VES con
+`--currency VES` (en `setup` y en `company create`). Se fija al crear la
+empresa y no se puede cambiar después; ver [inventario](inventario.md#costo-promedio-ponderado-cpp).
+
 ## 2. Crecer: más empresas, sucursales o almacenes
 
 ```sh

@@ -6,6 +6,7 @@ import (
 	"testing"
 	"time"
 
+	"github.com/gamijoam/inventario-go/internal/domain/money"
 	"github.com/gamijoam/inventario-go/internal/domain/org"
 	"github.com/gamijoam/inventario-go/internal/domain/scope"
 )
@@ -142,3 +143,21 @@ func TestConstructorsValidateInput(t *testing.T) {
 }
 
 func second[T any](_ T, err error) error { return err }
+
+func TestCurrencyOfValuation(t *testing.T) {
+	for in, want := range map[string]money.Currency{"usd": money.USD, " VES ": money.VES} {
+		if got, err := org.ParseCurrency(in); err != nil || got != want {
+			t.Errorf("ParseCurrency(%q) = %q, %v", in, got, err)
+		}
+	}
+	for _, in := range []string{"", "EUR", "US$", "bs"} {
+		if _, err := org.ParseCurrency(in); !errors.Is(err, org.ErrInvalid) {
+			t.Errorf("ParseCurrency(%q) debía fallar, obtuvo %v", in, err)
+		}
+	}
+	o, _ := org.NewOrganization("o", "O", now)
+	c, err := org.NewCompany(o, "c", "C", org.RIF{}, now)
+	if err != nil || c.Currency != money.USD {
+		t.Fatalf("la empresa nueva valora en USD por defecto: %q %v", c.Currency, err)
+	}
+}

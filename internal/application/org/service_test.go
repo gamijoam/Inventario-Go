@@ -280,7 +280,7 @@ func TestCreateAndListWithinOrganization(t *testing.T) {
 	ctx := context.Background()
 	actor := as(res.Organization.Scope())
 
-	c, err := svc.CreateCompany(ctx, actor, "norte", "Bodega Ana Norte, C.A.", "")
+	c, err := svc.CreateCompany(ctx, actor, "norte", "Bodega Ana Norte, C.A.", "", "")
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -312,17 +312,17 @@ func TestDuplicateCodesConflictWithinParentOnly(t *testing.T) {
 	ctx := context.Background()
 	actor := as(res.Organization.Scope())
 
-	if _, err := svc.CreateCompany(ctx, actor, "PRINCIPAL", "Otra", ""); !errors.Is(err, apporg.ErrConflict) {
+	if _, err := svc.CreateCompany(ctx, actor, "PRINCIPAL", "Otra", "", ""); !errors.Is(err, apporg.ErrConflict) {
 		t.Errorf("código de empresa repetido: %v", err)
 	}
-	if _, err := svc.CreateCompany(ctx, actor, "otra", "Otra", "J-12345678-9"); !errors.Is(err, apporg.ErrConflict) {
+	if _, err := svc.CreateCompany(ctx, actor, "otra", "Otra", "J-12345678-9", ""); !errors.Is(err, apporg.ErrConflict) {
 		t.Errorf("RIF repetido en la organización: %v", err)
 	}
 	if _, err := svc.CreateBranch(ctx, actor, "principal", "principal", "Duplicada"); !errors.Is(err, apporg.ErrConflict) {
 		t.Errorf("código de sucursal repetido: %v", err)
 	}
 	// El mismo código en otra empresa es válido.
-	if _, err := svc.CreateCompany(ctx, actor, "segunda", "Segunda", ""); err != nil {
+	if _, err := svc.CreateCompany(ctx, actor, "segunda", "Segunda", "", ""); err != nil {
 		t.Fatal(err)
 	}
 	if _, err := svc.CreateBranch(ctx, actor, "segunda", "principal", "Principal"); err != nil {
@@ -357,12 +357,12 @@ func TestNarrowActorsCannotWidenTheirScope(t *testing.T) {
 	svc, _, res := bootstrapped(t)
 	ctx := context.Background()
 	orgActor := as(res.Organization.Scope())
-	if _, err := svc.CreateCompany(ctx, orgActor, "b", "Empresa B", ""); err != nil {
+	if _, err := svc.CreateCompany(ctx, orgActor, "b", "Empresa B", "", ""); err != nil {
 		t.Fatal(err)
 	}
 
 	companyActor := as(res.Company.Scope())
-	if _, err := svc.CreateCompany(ctx, companyActor, "c", "Empresa C", ""); !errors.Is(err, identity.ErrDenied) {
+	if _, err := svc.CreateCompany(ctx, companyActor, "c", "Empresa C", "", ""); !errors.Is(err, identity.ErrDenied) {
 		t.Errorf("actor de empresa creando empresa: %v", err)
 	}
 	if _, err := svc.CreateBranch(ctx, companyActor, "b", "x", "X"); !errors.Is(err, apporg.ErrNotFound) {

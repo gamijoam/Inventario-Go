@@ -80,8 +80,8 @@ func (r *orgRepo) InsertCompany(ctx context.Context, c org.Company) error {
 		rif = c.RIF.String()
 	}
 	return r.exec(ctx, "empresa "+c.Code.String()+" (código o RIF repetido)",
-		"INSERT INTO companies (organization_id, id, code, legal_name, rif, status, created_at_utc, updated_at_utc) VALUES (?, ?, ?, ?, ?, ?, ?, ?)",
-		c.OrganizationID.String(), c.ID.String(), c.Code.String(), c.LegalName.String(), rif, string(c.Status), r.ts(c.CreatedAt), r.ts(c.CreatedAt))
+		"INSERT INTO companies (organization_id, id, code, legal_name, rif, status, created_at_utc, updated_at_utc, valuation_currency) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)",
+		c.OrganizationID.String(), c.ID.String(), c.Code.String(), c.LegalName.String(), rif, string(c.Status), r.ts(c.CreatedAt), r.ts(c.CreatedAt), c.Currency.Code())
 }
 
 func (r *orgRepo) InsertBranch(ctx context.Context, b org.Branch) error {
@@ -98,7 +98,7 @@ func (r *orgRepo) InsertWarehouse(ctx context.Context, w org.Warehouse) error {
 
 const (
 	orgCols       = "CAST(id AS TEXT), code, name, status, created_at_utc"
-	companyCols   = "CAST(organization_id AS TEXT), CAST(id AS TEXT), code, legal_name, rif, status, created_at_utc"
+	companyCols   = "CAST(organization_id AS TEXT), CAST(id AS TEXT), code, legal_name, rif, status, created_at_utc, valuation_currency"
 	branchCols    = "CAST(organization_id AS TEXT), CAST(company_id AS TEXT), CAST(id AS TEXT), code, name, status, created_at_utc"
 	warehouseCols = "CAST(organization_id AS TEXT), CAST(company_id AS TEXT), CAST(branch_id AS TEXT), CAST(id AS TEXT), code, name, status, created_at_utc"
 )
@@ -231,10 +231,10 @@ func scanOrganization(sc scanner) (org.Organization, error) {
 }
 
 func scanCompany(sc scanner) (org.Company, error) {
-	var orgID, rawID, code, name, status string
+	var orgID, rawID, code, name, status, currency string
 	var rif sql.NullString
 	var created any
-	if err := sc.Scan(&orgID, &rawID, &code, &name, &rif, &status, &created); err != nil {
+	if err := sc.Scan(&orgID, &rawID, &code, &name, &rif, &status, &created, &currency); err != nil {
 		return org.Company{}, err
 	}
 	var c org.Company
@@ -251,6 +251,9 @@ func scanCompany(sc scanner) (org.Company, error) {
 		}
 	}
 	c.Status = org.Status(status)
+	if c.Currency, err = org.ParseCurrency(currency); err != nil {
+		return c, err
+	}
 	if c.Code, c.LegalName, c.CreatedAt, err = decodeCommon(code, name, created); err != nil {
 		return c, err
 	}
