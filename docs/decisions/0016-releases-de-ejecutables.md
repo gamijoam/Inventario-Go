@@ -14,7 +14,10 @@ versión.
 ## Decisión
 
 1. **Etiquetas semánticas.** Un release se publica al empujar una etiqueta
-   `vX.Y.Z` sobre un commit de `main`. Las que llevan sufijo (`-alpha.1`,
+   `vX.Y.Z` sobre un commit de `main`, o lanzando el workflow a mano
+   ("Run workflow" sobre `main`, con la versión): entonces el workflow crea
+   la etiqueta en ese commit. Así puede publicar quien no tenga permiso para
+   empujar etiquetas, como el agente que desarrolla en una rama. Las que llevan sufijo (`-alpha.1`,
    `-rc.1`) se publican como *prerelease*. Mientras V1 no esté lista, la
    versión menor sigue el hito: `v0.3.x` es M3, `v0.4.x` será M4.
 2. **Workflow `release.yml`**, en dos etapas:
