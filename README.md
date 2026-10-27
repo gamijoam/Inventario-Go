@@ -43,7 +43,7 @@ adaptadores; `scripts/check-domain-deps.sh` lo verifica en CI.
 ```sh
 go build -o bin/balanzapro ./cmd/balanzapro   # en Windows: bin/balanzapro.exe
 
-balanzapro                  # TUI interactiva (requiere terminal)
+balanzapro                  # TUI: sesión, productos, existencias, kardex, precios y aprobación (requiere terminal)
 balanzapro version [--json]
 balanzapro doctor [--json]  # diagnóstico sin credenciales
 balanzapro config show [--json]
@@ -144,6 +144,7 @@ scripts/              verificaciones de CI
 ## Documentación
 
 - [Instalar y probar](docs/user-guide/instalar.md): descargar el release (Windows/Linux) y un recorrido de prueba.
+- [Pantalla interactiva (TUI)](docs/user-guide/tui.md): navegación, listas con filtro y aprobación de precios.
 - [Primeros pasos](docs/user-guide/primeros-pasos.md): instalación, `setup` y estructura del negocio.
 - [Usuarios y permisos](docs/user-guide/usuarios-y-permisos.md): sesión, usuarios, roles y ámbitos.
 - [Catálogo](docs/user-guide/catalogo.md): productos, SKU, códigos de barras y unidades.

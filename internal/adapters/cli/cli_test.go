@@ -30,6 +30,9 @@ type runOpts struct {
 	// passwords son las respuestas, en orden, a los avisos de contraseña
 	// en terminal.
 	passwords []string
+	// tui, si no es nil, se ejecuta en lugar de la TUI con sus opciones,
+	// mientras la base sigue abierta.
+	tui func(tui.Options)
 }
 
 func run(t *testing.T, o runOpts, args ...string) result {
@@ -60,6 +63,9 @@ func run(t *testing.T, o runOpts, args ...string) result {
 			r.tuiOpened, r.tuiNoColour = true, opts.NoColor
 			if opts.Doctor == nil {
 				t.Errorf("la TUI debe recibir el caso de uso de diagnóstico")
+			}
+			if o.tui != nil {
+				o.tui(opts)
 			}
 			return nil
 		},

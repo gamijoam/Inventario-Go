@@ -119,6 +119,17 @@ func newRootCmd(env Env, flags *globalFlags) *cobra.Command {
 				Build:   buildinfo.Get(),
 				Doctor:  func(ctx context.Context) admin.Report { return admin.RunDoctor(ctx, doctorChecks(env, flags)) },
 			}
+			// Con la base lista, la TUI da acceso a los módulos; si no, se
+			// queda en diagnóstico y versión y explica por qué.
+			octx, cancel := context.WithTimeout(cmd.Context(), dbTimeout)
+			s, err := openStore(octx, env, flags, io.Discard)
+			cancel()
+			if err != nil {
+				opts.Unavailable = unavailableReason(err)
+			} else {
+				defer s.close()
+				opts.Backend = newTUIBackend(s)
+			}
 			return env.RunTUI(cmd.Context(), env.In, env.Out, opts)
 		},
 	}
@@ -179,4 +190,16 @@ func writeJSON(w io.Writer, v any) error {
 	enc.SetIndent("", "  ")
 	enc.SetEscapeHTML(false)
 	return enc.Encode(v)
+}
+
+// unavailableReason explica en una línea por qué la TUI no tiene módulos.
+func unavailableReason(err error) string {
+	var e *exitError
+	if errors.As(err, &e) {
+		if e.code == ExitNotFound {
+			return "Instalación sin configurar: " + e.msg + "."
+		}
+		return "Base de datos no disponible: " + e.msg
+	}
+	return "Base de datos no disponible: " + err.Error()
 }
