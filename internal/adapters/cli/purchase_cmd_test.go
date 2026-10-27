@@ -3,8 +3,10 @@ package cli_test
 import (
 	"strings"
 	"testing"
+	"time"
 
 	"github.com/gamijoam/inventario-go/internal/adapters/cli"
+	"github.com/gamijoam/inventario-go/internal/domain/timezone"
 )
 
 func TestPurchasingFromTheCLI(t *testing.T) {
@@ -76,7 +78,7 @@ func TestPurchasingFromTheCLI(t *testing.T) {
 		}
 	}
 	c := decode(t, mustRun(t, admin, "purchase", "cost", "show", "--product", "HARINA", "--json").stdout)
-	if c["schema"] != "balanzapro.product-costs/v1" || c["last_purchase"].(map[string]any)["receipt_number"] != number || len(c["replacement_costs"].([]any)) != 1 {
+	if c["schema"] != "balanzapro.product-costs/v2" || c["last_purchase"].(map[string]any)["receipt_number"] != number || len(c["replacement_costs"].([]any)) != 1 {
 		t.Fatalf("cost show json: %v", c)
 	}
 	if r := run(t, admin, "purchase", "receipt", "list", "--json"); len(decode(t, r.stdout)["items"].([]any)) != 1 {
@@ -97,4 +99,64 @@ func TestPurchasingFromTheCLI(t *testing.T) {
 		t.Errorf("almacenista crea proveedor: %d", r.code)
 	}
 	mustRun(t, admin, "purchase", "receipt", "cancel", rc2)
+}
+
+func TestRatesAndForeignPurchasesFromTheCLI(t *testing.T) {
+	admin := setupSQLite(t)
+	mustRun(t, admin, "product", "create", "--name", "Harina", "--sku", "HARINA")
+	mustRun(t, admin, "purchase", "supplier", "create", "--code", "dist", "--name", "Distribuidora")
+	// Tasas ficticias: una de ayer y otra de hoy.
+	today := timezone.DateOf(time.Now())
+	yesterday := today.AddDate(0, 0, -1).Format(timezone.DateLayout)
+	r := run(t, admin, "rate", "set", "--base", "USD", "--quote", "VES", "--rate", "40", "--source", "official", "--label", "BCV", "--date", yesterday)
+	if r.code != cli.ExitOK || !strings.Contains(r.stdout, "1 USD = 40 VES (oficial BCV), vigente desde "+yesterday+", versión 1") {
+		t.Fatalf("rate set: %d %s %s", r.code, r.stdout, r.stderr)
+	}
+	x := decode(t, mustRun(t, admin, "rate", "set", "--base", "USD", "--quote", "VES", "--rate", "50", "--source", "manual", "--label", "Gerencia", "--json").stdout)
+	if x["schema"] != "balanzapro.exchange-rate/v1" || x["rate"] != "50" || x["version"] != float64(2) || x["source_type"] != "manually_entered" {
+		t.Fatalf("rate set --json: %v", x)
+	}
+	if r := run(t, admin, "rate", "set", "--base", "USD", "--quote", "USD", "--rate", "1", "--source", "official", "--label", "X"); r.code != cli.ExitUsage {
+		t.Errorf("par inválido: %d", r.code)
+	}
+	if r := run(t, admin, "rate", "show", "--date", yesterday); !strings.Contains(r.stdout, "1 USD = 40 VES") {
+		t.Errorf("rate show ayer: %s", r.stdout)
+	}
+	if l := decode(t, mustRun(t, admin, "rate", "list", "--pair", "USD/VES", "--json").stdout); len(l["items"].([]any)) != 2 {
+		t.Errorf("rate list: %v", l)
+	}
+	if r := run(t, admin, "rate", "show", "--date", "2000-01-01"); r.code != cli.ExitConflict {
+		t.Errorf("sin tasa: %d %s", r.code, r.stderr)
+	}
+
+	// Factura de ayer en VES: la tasa de ayer, aunque hoy rija otra.
+	rc := decode(t, mustRun(t, admin, "purchase", "receipt", "create", "--supplier", "dist", "--currency", "VES", "--date", yesterday, "--json").stdout)
+	number := rc["number"].(string)
+	if rc["schema"] != "balanzapro.purchase-receipt/v2" || rc["currency"] != "VES" || rc["valuation_currency"] != "USD" || rc["document_date"] != yesterday {
+		t.Fatalf("recepción: %v", rc)
+	}
+	mustRun(t, admin, "purchase", "receipt", "line", number, "--product", "HARINA", "--qty", "10", "--unit-cost", "400")
+	mustRun(t, admin, "purchase", "receipt", "expense", number, "--concept", "Flete", "--amount", "2", "--currency", "USD")
+	c := decode(t, mustRun(t, admin, "purchase", "receipt", "confirm", number, "--json").stdout)
+	line := c["lines"].([]any)[0].(map[string]any)
+	if c["rate"].(map[string]any)["rate"] != "40" || line["valued_cost"] != "100" || line["total_cost"] != "102" {
+		t.Fatalf("confirmada: %v", c)
+	}
+	r = run(t, admin, "purchase", "receipt", "show", number)
+	for _, want := range []string{"documento del " + yesterday + " en VES; tasa aplicada 1 USD = 40 VES (BCV", "gasto Flete del " + yesterday + ": 2 USD"} {
+		if !strings.Contains(r.stdout, want) {
+			t.Errorf("show sin %q:\n%s", want, r.stdout)
+		}
+	}
+	r = run(t, admin, "purchase", "cost", "show", "--product", "HARINA")
+	if !strings.Contains(r.stdout, "último costo de compra: 400 VES = 10 (10.2 con gastos)") {
+		t.Errorf("cost show:\n%s", r.stdout)
+	}
+
+	// El cajero consulta tasas, pero no las registra.
+	caja := user(t, admin, "caja1", "CAJERO")
+	mustRun(t, caja, "rate", "show")
+	if r := run(t, caja, "rate", "set", "--base", "USD", "--quote", "VES", "--rate", "1", "--source", "official", "--label", "X"); r.code != cli.ExitForbidden {
+		t.Errorf("cajero registra: %d", r.code)
+	}
 }

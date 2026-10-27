@@ -38,6 +38,17 @@ var (
 	VES = mustCurrency("VES", 2)
 )
 
+// Lookup devuelve una moneda habilitada por su código (USD o VES).
+func Lookup(code string) (Currency, error) {
+	switch code {
+	case USD.code:
+		return USD, nil
+	case VES.code:
+		return VES, nil
+	}
+	return Currency{}, fmt.Errorf("%w: %q no está habilitada (use USD o VES)", ErrInvalidCurrency, code)
+}
+
 // NewCurrency crea una moneda; code debe ser de tres letras mayúsculas.
 func NewCurrency(code string, scale int32) (Currency, error) {
 	if !currencyCode.MatchString(code) {

@@ -29,3 +29,18 @@ func InCaracas(t time.Time) time.Time { return t.In(caracas) }
 
 // ToUTC normaliza un instante para persistencia y sincronización.
 func ToUTC(t time.Time) time.Time { return t.UTC() }
+
+// DateLayout es el formato de una fecha comercial.
+const DateLayout = "2006-01-02"
+
+// DateOf devuelve la fecha comercial de Caracas del instante t, como la
+// medianoche UTC de ese día.
+func DateOf(t time.Time) time.Time {
+	y, m, d := t.In(caracas).Date()
+	return time.Date(y, m, d, 0, 0, 0, 0, time.UTC)
+}
+
+// ParseDate lee una fecha comercial AAAA-MM-DD.
+func ParseDate(s string) (time.Time, error) {
+	return time.Parse(DateLayout, s)
+}

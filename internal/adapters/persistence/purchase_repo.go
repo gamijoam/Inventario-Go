@@ -10,6 +10,8 @@ import (
 	"github.com/gamijoam/inventario-go/internal/application/stock"
 	"github.com/gamijoam/inventario-go/internal/domain/decimal"
 	"github.com/gamijoam/inventario-go/internal/domain/id"
+	"github.com/gamijoam/inventario-go/internal/domain/inventory"
+	"github.com/gamijoam/inventario-go/internal/domain/money"
 	"github.com/gamijoam/inventario-go/internal/domain/org"
 	"github.com/gamijoam/inventario-go/internal/domain/purchase"
 	"github.com/gamijoam/inventario-go/internal/domain/scope"
@@ -93,9 +95,9 @@ func (r *orgRepo) Suppliers(ctx context.Context, orgID id.ID) ([]purchase.Suppli
 func (r *orgRepo) InsertOrder(ctx context.Context, o purchase.Order) error {
 	sc := o.Scope
 	if err := r.exec(ctx, "orden "+o.Number,
-		"INSERT INTO purchase_orders (organization_id, id, company_id, branch_id, number, supplier_id, status, note, created_by, created_at_utc) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
+		"INSERT INTO purchase_orders (organization_id, id, company_id, branch_id, number, supplier_id, status, note, created_by, created_at_utc, currency) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
 		sc.Organization().String(), o.ID.String(), sc.Company().String(), sc.Branch().String(), o.Number, o.SupplierID.String(), string(o.Status),
-		o.Note, o.CreatedBy.String(), r.ts(o.CreatedAt)); err != nil {
+		o.Note, o.CreatedBy.String(), r.ts(o.CreatedAt), o.Currency.Code()); err != nil {
 		return err
 	}
 	for _, l := range o.Lines {
@@ -121,14 +123,18 @@ func (r *orgRepo) UpdateOrder(ctx context.Context, o purchase.Order) error {
 }
 
 const orderCols = "CAST(organization_id AS TEXT), CAST(id AS TEXT), CAST(company_id AS TEXT), CAST(branch_id AS TEXT), number, CAST(supplier_id AS TEXT), " +
-	"status, note, CAST(created_by AS TEXT), created_at_utc, CAST(closed_by AS TEXT), closed_at_utc"
+	"status, note, CAST(created_by AS TEXT), created_at_utc, CAST(closed_by AS TEXT), closed_at_utc, currency"
 
 func scanOrder(sc scanner) (purchase.Order, error) {
-	var o, oid, c, b, sup, status, by string
+	var o, oid, c, b, sup, status, by, cur string
 	var closedBy sql.NullString
 	var at, closed any
 	var v purchase.Order
-	if err := sc.Scan(&o, &oid, &c, &b, &v.Number, &sup, &status, &v.Note, &by, &at, &closedBy, &closed); err != nil {
+	if err := sc.Scan(&o, &oid, &c, &b, &v.Number, &sup, &status, &v.Note, &by, &at, &closedBy, &closed, &cur); err != nil {
+		return v, err
+	}
+	var err error
+	if v.Currency, err = money.Lookup(cur); err != nil {
 		return v, err
 	}
 	ids, err := parseIDs(o, oid, c, b, sup, by, closedBy.String)
@@ -208,15 +214,16 @@ func (r *orgRepo) Orders(ctx context.Context, orgID id.ID, status purchase.Order
 func (r *orgRepo) InsertReceipt(ctx context.Context, rc purchase.Receipt) error {
 	sc := rc.Scope
 	return r.exec(ctx, "recepción "+rc.Number,
-		"INSERT INTO purchase_receipts (organization_id, id, company_id, branch_id, warehouse_id, number, supplier_id, order_id, status, supplier_document, note, created_by, created_at_utc) "+
-			"VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
+		"INSERT INTO purchase_receipts (organization_id, id, company_id, branch_id, warehouse_id, number, supplier_id, order_id, status, supplier_document, note, created_by, created_at_utc, "+
+			"currency, document_date) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
 		sc.Organization().String(), rc.ID.String(), sc.Company().String(), sc.Branch().String(), sc.Warehouse().String(), rc.Number,
-		rc.SupplierID.String(), nullID(rc.OrderID), string(rc.Status), rc.SupplierDocument, rc.Note, rc.CreatedBy.String(), r.ts(rc.CreatedAt))
+		rc.SupplierID.String(), nullID(rc.OrderID), string(rc.Status), rc.SupplierDocument, rc.Note, rc.CreatedBy.String(), r.ts(rc.CreatedAt),
+		rc.Currency.Code(), date(rc.DocumentDate))
 }
 
 func (r *orgRepo) UpdateReceipt(ctx context.Context, rc purchase.Receipt) error {
-	res, err := r.tx.ExecContext(ctx, r.q("UPDATE purchase_receipts SET status = ?, closed_by = ?, closed_at_utc = ? WHERE organization_id = ? AND id = ? AND status = 'draft'"),
-		string(rc.Status), nullID(rc.ClosedBy), r.nullTime(rc.ClosedAt), rc.Scope.Organization().String(), rc.ID.String())
+	res, err := r.tx.ExecContext(ctx, r.q("UPDATE purchase_receipts SET status = ?, closed_by = ?, closed_at_utc = ?, rate_id = ? WHERE organization_id = ? AND id = ? AND status = 'draft'"),
+		string(rc.Status), nullID(rc.ClosedBy), r.nullTime(rc.ClosedAt), nullID(rc.RateID), rc.Scope.Organization().String(), rc.ID.String())
 	if err != nil {
 		return fmt.Errorf("guardar recepción: %w", err)
 	}
@@ -235,13 +242,16 @@ func (r *orgRepo) SaveReceiptLines(ctx context.Context, rc purchase.Receipt) err
 		return fmt.Errorf("guardar líneas de recepción: %w", err)
 	}
 	for _, l := range rc.Lines {
-		var orderLine any
+		var orderLine, valued any
 		if l.OrderLineNo > 0 {
 			orderLine = l.OrderLineNo
 		}
+		if rc.Status != purchase.ReceiptDraft {
+			valued = dec(l.Valued)
+		}
 		if err := r.exec(ctx, "línea de recepción",
-			"INSERT INTO purchase_receipt_lines (organization_id, receipt_id, line_no, product_id, order_line_no, quantity, unit_cost, expenses, movement_id) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)",
-			orgID, rc.ID.String(), l.LineNo, l.ProductID.String(), orderLine, dec(l.Quantity), dec(l.UnitCost), dec(l.Expenses), nullID(l.MovementID)); err != nil {
+			"INSERT INTO purchase_receipt_lines (organization_id, receipt_id, line_no, product_id, order_line_no, quantity, unit_cost, expenses, movement_id, valued) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
+			orgID, rc.ID.String(), l.LineNo, l.ProductID.String(), orderLine, dec(l.Quantity), dec(l.UnitCost), dec(l.Expenses), nullID(l.MovementID), valued); err != nil {
 			return err
 		}
 	}
@@ -249,18 +259,26 @@ func (r *orgRepo) SaveReceiptLines(ctx context.Context, rc purchase.Receipt) err
 }
 
 const receiptCols = "CAST(organization_id AS TEXT), CAST(id AS TEXT), CAST(company_id AS TEXT), CAST(branch_id AS TEXT), CAST(warehouse_id AS TEXT), number, " +
-	"CAST(supplier_id AS TEXT), CAST(order_id AS TEXT), status, supplier_document, note, CAST(created_by AS TEXT), created_at_utc, CAST(closed_by AS TEXT), closed_at_utc"
+	"CAST(supplier_id AS TEXT), CAST(order_id AS TEXT), status, supplier_document, note, CAST(created_by AS TEXT), created_at_utc, CAST(closed_by AS TEXT), closed_at_utc, " +
+	"currency, CAST(document_date AS TEXT), CAST(rate_id AS TEXT)"
 
 func scanReceipt(sc scanner) (purchase.Receipt, error) {
-	var o, rid, c, b, w, sup, status, by string
-	var order, closedBy sql.NullString
+	var o, rid, c, b, w, sup, status, by, cur, on string
+	var order, closedBy, rate sql.NullString
 	var at, closed any
 	var v purchase.Receipt
-	if err := sc.Scan(&o, &rid, &c, &b, &w, &v.Number, &sup, &order, &status, &v.SupplierDocument, &v.Note, &by, &at, &closedBy, &closed); err != nil {
+	if err := sc.Scan(&o, &rid, &c, &b, &w, &v.Number, &sup, &order, &status, &v.SupplierDocument, &v.Note, &by, &at, &closedBy, &closed, &cur, &on, &rate); err != nil {
 		return v, err
 	}
-	ids, err := parseIDs(o, rid, c, b, w, sup, order.String, by, closedBy.String)
+	ids, err := parseIDs(o, rid, c, b, w, sup, order.String, by, closedBy.String, rate.String)
 	if err != nil {
+		return v, err
+	}
+	v.RateID = ids[9]
+	if v.Currency, err = money.Lookup(cur); err != nil {
+		return v, err
+	}
+	if v.DocumentDate, err = parseDate(on); err != nil {
 		return v, err
 	}
 	if v.Scope, err = scope.New(ids[0], ids[2], ids[3], ids[4]); err != nil {
@@ -279,9 +297,9 @@ func (r *orgRepo) receiptLines(ctx context.Context, rc purchase.Receipt) (purcha
 	rc.Lines, err = queryAll(ctx, r, func(sc scanner) (purchase.ReceiptLine, error) {
 		var pid, qty, cost, expenses string
 		var orderLine sql.NullInt64
-		var movement sql.NullString
+		var movement, valued sql.NullString
 		var l purchase.ReceiptLine
-		if err := sc.Scan(&l.LineNo, &pid, &orderLine, &qty, &cost, &expenses, &movement); err != nil {
+		if err := sc.Scan(&l.LineNo, &pid, &orderLine, &qty, &cost, &expenses, &movement, &valued); err != nil {
 			return l, err
 		}
 		ids, err := parseIDs(pid, movement.String)
@@ -295,9 +313,18 @@ func (r *orgRepo) receiptLines(ctx context.Context, rc purchase.Receipt) (purcha
 		if l.UnitCost, err = parseDec(cost); err != nil {
 			return l, err
 		}
-		l.Expenses, err = parseDec(expenses)
+		if l.Expenses, err = parseDec(expenses); err != nil {
+			return l, err
+		}
+		// Sin valorar: borrador, o confirmada antes de BP-M3-002 en la
+		// moneda de valoración.
+		if !valued.Valid {
+			l.Valued = l.BaseCost()
+			return l, nil
+		}
+		l.Valued, err = parseDec(valued.String)
 		return l, err
-	}, "SELECT line_no, CAST(product_id AS TEXT), order_line_no, CAST(quantity AS TEXT), CAST(unit_cost AS TEXT), CAST(expenses AS TEXT), CAST(movement_id AS TEXT) "+
+	}, "SELECT line_no, CAST(product_id AS TEXT), order_line_no, CAST(quantity AS TEXT), CAST(unit_cost AS TEXT), CAST(expenses AS TEXT), CAST(movement_id AS TEXT), CAST(valued AS TEXT) "+
 		"FROM purchase_receipt_lines WHERE organization_id = ? AND receipt_id = ? ORDER BY line_no", rc.Scope.Organization().String(), rc.ID.String())
 	return rc, err
 }
@@ -338,8 +365,10 @@ func (r *orgRepo) Receipts(ctx context.Context, orgID id.ID, status purchase.Rec
 
 func (r *orgRepo) InsertExpense(ctx context.Context, orgID id.ID, e purchase.Expense) error {
 	return r.exec(ctx, "gasto",
-		"INSERT INTO purchase_expenses (organization_id, id, receipt_id, concept, amount, criterion, late, created_by, created_at_utc) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)",
-		orgID.String(), e.ID.String(), e.ReceiptID.String(), e.Concept, dec(e.Amount), string(e.Criterion), e.Late, e.CreatedBy.String(), r.ts(e.CreatedAt))
+		"INSERT INTO purchase_expenses (organization_id, id, receipt_id, concept, amount, criterion, late, created_by, created_at_utc, currency, expense_date, rate_id, valued) "+
+			"VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
+		orgID.String(), e.ID.String(), e.ReceiptID.String(), e.Concept, dec(e.Amount), string(e.Criterion), e.Late, e.CreatedBy.String(), r.ts(e.CreatedAt),
+		e.Currency.Code(), date(e.Date), nullID(e.RateID), dec(e.Valued))
 }
 
 func (r *orgRepo) InsertAllocations(ctx context.Context, orgID id.ID, e purchase.Expense) error {
@@ -355,24 +384,39 @@ func (r *orgRepo) InsertAllocations(ctx context.Context, orgID id.ID, e purchase
 
 func (r *orgRepo) Expenses(ctx context.Context, orgID, receiptID id.ID) ([]purchase.Expense, error) {
 	list, err := queryAll(ctx, r, func(sc scanner) (purchase.Expense, error) {
-		var eid, rid, amount, criterion, by string
+		var eid, rid, amount, criterion, by, cur, on string
+		var rate, valued sql.NullString
 		var late bool
 		var at any
 		var e purchase.Expense
-		if err := sc.Scan(&eid, &rid, &e.Concept, &amount, &criterion, &late, &by, &at); err != nil {
+		if err := sc.Scan(&eid, &rid, &e.Concept, &amount, &criterion, &late, &by, &at, &cur, &on, &rate, &valued); err != nil {
 			return e, err
 		}
-		ids, err := parseIDs(eid, rid, by)
+		ids, err := parseIDs(eid, rid, by, rate.String)
 		if err != nil {
 			return e, err
 		}
-		e.ID, e.ReceiptID, e.CreatedBy, e.Criterion, e.Late = ids[0], ids[1], ids[2], purchase.Criterion(criterion), late
+		e.ID, e.ReceiptID, e.CreatedBy, e.RateID, e.Criterion, e.Late = ids[0], ids[1], ids[2], ids[3], purchase.Criterion(criterion), late
 		if e.Amount, err = parseDec(amount); err != nil {
 			return e, err
 		}
+		if e.Currency, err = money.Lookup(cur); err != nil {
+			return e, err
+		}
+		if e.Date, err = parseDate(on); err != nil {
+			return e, err
+		}
+		// Sin valorar: gasto anterior a BP-M3-002, en la moneda de valoración.
+		e.Valued = e.Amount
+		if valued.Valid {
+			if e.Valued, err = parseDec(valued.String); err != nil {
+				return e, err
+			}
+		}
 		e.CreatedAt, err = parseTime(at)
 		return e, err
-	}, "SELECT CAST(id AS TEXT), CAST(receipt_id AS TEXT), concept, CAST(amount AS TEXT), criterion, late, CAST(created_by AS TEXT), created_at_utc "+
+	}, "SELECT CAST(id AS TEXT), CAST(receipt_id AS TEXT), concept, CAST(amount AS TEXT), criterion, late, CAST(created_by AS TEXT), created_at_utc, "+
+		"currency, CAST(expense_date AS TEXT), CAST(rate_id AS TEXT), CAST(valued AS TEXT) "+
 		"FROM purchase_expenses WHERE organization_id = ? AND receipt_id = ? ORDER BY created_at_utc, id", orgID.String(), receiptID.String())
 	if err != nil {
 		return nil, err
@@ -412,16 +456,20 @@ func (r *orgRepo) Expenses(ctx context.Context, orgID, receiptID id.ID) ([]purch
 
 func (r *orgRepo) InsertReplacementCost(ctx context.Context, c purchase.ReplacementCost) error {
 	return r.exec(ctx, "costo de reposición",
-		"INSERT INTO replacement_costs (organization_id, id, company_id, product_id, unit_cost, note, actor_id, occurred_at_utc) VALUES (?, ?, ?, ?, ?, ?, ?, ?)",
-		c.OrganizationID.String(), c.ID.String(), c.CompanyID.String(), c.ProductID.String(), dec(c.UnitCost), c.Note, c.ActorID.String(), r.ts(c.OccurredAt))
+		"INSERT INTO replacement_costs (organization_id, id, company_id, product_id, unit_cost, note, actor_id, occurred_at_utc, currency) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)",
+		c.OrganizationID.String(), c.ID.String(), c.CompanyID.String(), c.ProductID.String(), dec(c.UnitCost), c.Note, c.ActorID.String(), r.ts(c.OccurredAt), c.Currency.Code())
 }
 
 func (r *orgRepo) ReplacementCosts(ctx context.Context, orgID, companyID, productID id.ID) ([]purchase.ReplacementCost, error) {
 	return queryAll(ctx, r, func(sc scanner) (purchase.ReplacementCost, error) {
-		var o, cid, c, p, cost, actor string
+		var o, cid, c, p, cost, actor, cur string
 		var at any
 		var v purchase.ReplacementCost
-		if err := sc.Scan(&o, &cid, &c, &p, &cost, &v.Note, &actor, &at); err != nil {
+		if err := sc.Scan(&o, &cid, &c, &p, &cost, &v.Note, &actor, &at, &cur); err != nil {
+			return v, err
+		}
+		var err error
+		if v.Currency, err = money.Lookup(cur); err != nil {
 			return v, err
 		}
 		ids, err := parseIDs(o, cid, c, p, actor)
@@ -435,18 +483,19 @@ func (r *orgRepo) ReplacementCosts(ctx context.Context, orgID, companyID, produc
 		v.OccurredAt, err = parseTime(at)
 		return v, err
 	}, "SELECT CAST(organization_id AS TEXT), CAST(id AS TEXT), CAST(company_id AS TEXT), CAST(product_id AS TEXT), CAST(unit_cost AS TEXT), note, "+
-		"CAST(actor_id AS TEXT), occurred_at_utc FROM replacement_costs WHERE organization_id = ? AND company_id = ? AND product_id = ? ORDER BY occurred_at_utc, id",
+		"CAST(actor_id AS TEXT), occurred_at_utc, currency FROM replacement_costs WHERE organization_id = ? AND company_id = ? AND product_id = ? ORDER BY occurred_at_utc, id",
 		orgID.String(), companyID.String(), productID.String())
 }
 
 func (r *orgRepo) LastPurchase(ctx context.Context, orgID, companyID, productID id.ID) (purchasing.LastPurchase, error) {
-	var qty, cost, expenses string
+	var qty, cost, expenses, cur string
+	var valued sql.NullString
 	var at any
 	var v purchasing.LastPurchase
-	err := r.tx.QueryRowContext(ctx, r.q("SELECT CAST(l.quantity AS TEXT), CAST(l.unit_cost AS TEXT), CAST(l.expenses AS TEXT), rc.number, rc.closed_at_utc "+
+	err := r.tx.QueryRowContext(ctx, r.q("SELECT CAST(l.quantity AS TEXT), CAST(l.unit_cost AS TEXT), CAST(l.expenses AS TEXT), CAST(l.valued AS TEXT), rc.currency, rc.number, rc.closed_at_utc "+
 		"FROM purchase_receipt_lines l JOIN purchase_receipts rc ON rc.organization_id = l.organization_id AND rc.id = l.receipt_id "+
 		"WHERE l.organization_id = ? AND rc.company_id = ? AND l.product_id = ? AND rc.status = 'confirmed' ORDER BY rc.closed_at_utc DESC, rc.number DESC LIMIT 1"),
-		orgID.String(), companyID.String(), productID.String()).Scan(&qty, &cost, &expenses, &v.Receipt, &at)
+		orgID.String(), companyID.String(), productID.String()).Scan(&qty, &cost, &expenses, &valued, &cur, &v.Receipt, &at)
 	if err != nil {
 		return v, notFound(err, "compra")
 	}
@@ -457,12 +506,24 @@ func (r *orgRepo) LastPurchase(ctx context.Context, orgID, companyID, productID 
 	if v.UnitCost, err = parseDec(cost); err != nil {
 		return v, err
 	}
+	if v.Currency, err = money.Lookup(cur); err != nil {
+		return v, err
+	}
 	e, err := parseDec(expenses)
 	if err != nil {
 		return v, err
 	}
-	total := q.Mul(v.UnitCost).Round(purchase.AmountScale, decimal.HalfAwayFromZero).Add(e)
-	if v.TotalUnit, err = total.Div(q, 12, decimal.HalfAwayFromZero); err != nil {
+	l := purchase.ReceiptLine{Quantity: q, UnitCost: v.UnitCost}
+	base := l.BaseCost() // confirmada antes de BP-M3-002
+	if valued.Valid {
+		if base, err = parseDec(valued.String); err != nil {
+			return v, err
+		}
+	}
+	if v.ValuedUnit, err = base.Div(q, inventory.UnitCostScale, decimal.HalfAwayFromZero); err != nil {
+		return v, err
+	}
+	if v.TotalUnit, err = base.Add(e).Div(q, inventory.UnitCostScale, decimal.HalfAwayFromZero); err != nil {
 		return v, err
 	}
 	v.ReceivedAt, err = parseTime(at)

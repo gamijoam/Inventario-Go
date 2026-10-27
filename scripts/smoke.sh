@@ -84,6 +84,17 @@ test "$code" -eq 8
 "$bin" purchase order show OC-000001
 "$bin" purchase cost set-replacement --product HAR-1 --unit-cost 1.40 --note cotización
 "$bin" purchase cost show --product HAR-1
+# Tasas y compra en otra moneda (BP-M3-002); tasa ficticia.
+"$bin" purchase receipt create --warehouse principal --supplier dist --currency VES --json
+"$bin" purchase receipt line RC-000002 --product HAR-1 --qty 5 --unit-cost 60
+# Sin tasa vigente no se confirma (código 6).
+set +e; "$bin" purchase receipt confirm RC-000002 >/dev/null 2>&1; code=$?; set -e
+test "$code" -eq 6
+"$bin" rate set --base USD --quote VES --rate 45.725 --source official --label BCV --reference "ficticia de prueba"
+"$bin" rate show --json
+"$bin" rate list
+"$bin" purchase receipt confirm RC-000002
+"$bin" purchase receipt show RC-000002
 "$bin" inventory verify
 # Un segundo setup debe rechazarse con el código 6 (conflicto).
 set +e; printf '%s\n' "$pw" | "$bin" setup --name Otra --password-stdin >/dev/null 2>&1; code=$?; set -e
