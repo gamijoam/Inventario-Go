@@ -45,6 +45,11 @@ const (
 	// KindCountIn y KindCountOut corrigen la existencia según un conteo.
 	KindCountIn  Kind = "count_in"
 	KindCountOut Kind = "count_out"
+	// KindPurchaseIn es la entrada de una recepción de compra.
+	KindPurchaseIn Kind = "purchase_in"
+	// KindRevaluation cambia el valor sin mover cantidad: un gasto de
+	// compra que llega después de recibir la mercancía.
+	KindRevaluation Kind = "revaluation"
 )
 
 // Reason es el motivo de un ajuste, de un catálogo fijo (ratificado
@@ -65,6 +70,9 @@ const (
 	ReasonReservation Reason = "reservation"
 	// ReasonCount es exclusivo de los ajustes por conteo físico.
 	ReasonCount Reason = "count"
+	// ReasonPurchase y ReasonPurchaseExpense son de las compras.
+	ReasonPurchase        Reason = "purchase"
+	ReasonPurchaseExpense Reason = "purchase_expense"
 )
 
 // ReasonInfo describe un motivo y en qué dirección se admite.
@@ -211,6 +219,7 @@ type Movement struct {
 	ReservationID   id.ID // despacho de una reserva
 	BlockID         id.ID // merma de mercancía bloqueada
 	CountID         id.ID // ajuste por conteo
+	ReceiptID       id.ID // recepción de compra (entrada o revaloración)
 	// PolicyChangeID es la versión de la política de negativos que
 	// autorizó una salida en déficit.
 	PolicyChangeID id.ID
@@ -283,6 +292,30 @@ func Replay(b Balance, movements []Movement) error {
 		return fmt.Errorf("%w: el kardex valora %s y el saldo registra %s", ErrReplayMismatch, value, b.Value)
 	}
 	return nil
+}
+
+// Revalue suma amount al valor del saldo sin mover cantidad: la parte
+// capitalizable de un gasto tardío de compra. Exige existencia positiva
+// valorada: sin unidades no hay a qué sumarle valor.
+func Revalue(b Balance, m Movement, amount decimal.Decimal, now time.Time) (Balance, Movement, error) {
+	if m.Key != b.Key {
+		return Balance{}, Movement{}, fmt.Errorf("%w: el movimiento es de otro saldo", ErrInvalid)
+	}
+	if amount.Sign() <= 0 {
+		return Balance{}, Movement{}, fmt.Errorf("%w: la revaloración debe ser positiva", ErrInvalid)
+	}
+	if b.OnHand.Sign() <= 0 || !b.Value.Known {
+		return Balance{}, Movement{}, fmt.Errorf("%w: no hay existencia valorada que revalorar", ErrValuation)
+	}
+	b.Value = Known(b.Value.Value.Add(amount))
+	b.LastUnitCost = lastCost(b.OnHand, b.Value, b.LastUnitCost)
+	b.Version++
+	b.UpdatedAt = now.UTC()
+	m.Kind, m.Quantity = KindRevaluation, decimal.Zero()
+	m.Sequence, m.OnHandAfter = b.Version, b.OnHand
+	m.UnitCost, m.Cost = Known(decimal.Zero()), Known(decimal.Zero())
+	m.ValueAdjustment, m.ValueAfter = amount, b.Value
+	return b, m, nil
 }
 
 // checkExit valida una salida contra el disponible. Una excepción

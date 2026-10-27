@@ -167,6 +167,52 @@ func (l Location) String() string {
 	return l.Company.Code.String() + "/" + l.Branch.Code.String() + "/" + l.Warehouse.Code.String()
 }
 
+// Locate resuelve un almacén para otro caso de uso de la misma
+// transacción (p. ej. compras), con las mismas reglas de visibilidad.
+func Locate(ctx context.Context, r Repository, p identity.Principal, ref WarehouseRef, perm identity.Permission) (Location, error) {
+	return locate(ctx, r, p, ref, perm)
+}
+
+// LocationOf describe el almacén de un ámbito.
+func LocationOf(ctx context.Context, r Repository, sc scope.BusinessScope) (Location, error) {
+	return location(ctx, r, sc)
+}
+
+// PostWithin aplica un movimiento dentro de la transacción de otro caso de
+// uso (p. ej. la entrada de una recepción de compra): bloquea el saldo,
+// libera reservas vencidas, valora y guarda saldo y movimiento.
+func (s *Service) PostWithin(ctx context.Context, r Repository, p identity.Principal, loc Location, productID id.ID, m inventory.Movement, c inventory.Costing) (inventory.Movement, error) {
+	return s.apply(ctx, r, p, loc, productID, m, c)
+}
+
+// RevalueWithin suma valor a un saldo sin mover cantidad, dentro de la
+// transacción de otro caso de uso. Devuelve también el saldo previo, para
+// que quien llama decida cuánto capitalizar.
+func (s *Service) RevalueWithin(ctx context.Context, r Repository, p identity.Principal, loc Location, productID id.ID, amount func(inventory.Balance) decimal.Decimal, m inventory.Movement) (inventory.Movement, inventory.Balance, error) {
+	l, err := s.lock(ctx, r, p.OrganizationID, loc, productID)
+	if err != nil {
+		return inventory.Movement{}, inventory.Balance{}, err
+	}
+	a := amount(l.Balance)
+	if a.Sign() <= 0 || l.isNew {
+		return inventory.Movement{}, l.Balance, nil
+	}
+	now := s.now().UTC()
+	mid, err := id.New()
+	if err != nil {
+		return inventory.Movement{}, inventory.Balance{}, err
+	}
+	m.ID, m.Key, m.ActorID, m.OccurredAt = mid, l.Key, p.UserID, now
+	b, m, err := inventory.Revalue(l.Balance, m, a, now)
+	if err != nil {
+		return inventory.Movement{}, inventory.Balance{}, err
+	}
+	if err := r.UpdateBalance(ctx, b, l.Version); err != nil {
+		return inventory.Movement{}, inventory.Balance{}, err
+	}
+	return m, l.Balance, r.InsertMovement(ctx, m)
+}
+
 // locate resuelve un almacén. Si el principal no lo ve, responde como si no
 // existiera; si lo ve pero le falta perm, deniega.
 func locate(ctx context.Context, r Repository, p identity.Principal, ref WarehouseRef, perm identity.Permission) (Location, error) {
@@ -260,6 +306,9 @@ func checkKey(k string) (string, error) {
 	}
 	return k, nil
 }
+
+// Digest es la huella de una solicitud para la idempotencia.
+func Digest(parts ...string) string { return digest(parts...) }
 
 func digest(parts ...string) string {
 	h := sha256.Sum256([]byte(strings.Join(parts, "\x1f")))

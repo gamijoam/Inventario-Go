@@ -254,3 +254,23 @@ func TestHoldLifecycles(t *testing.T) {
 		t.Error("decidir dos veces")
 	}
 }
+
+func TestRevaluationAddsValueWithoutQuantity(t *testing.T) {
+	l := newLedger(t)
+	l.apply("10", atUnit("8"))
+	b, m, err := inventory.Revalue(l.b, mv(l.b.Key, "0"), d("5"), now)
+	if err != nil || m.Kind != inventory.KindRevaluation || !m.Quantity.IsZero() || m.ValueAfter.Value.String() != "85" || b.UnitCost().Value.String() != "8.5" {
+		t.Fatalf("revalorar: %+v %v", m, err)
+	}
+	l.b, l.kardex = b, append(l.kardex, m)
+	l.want("10", "85")
+	// Una revaloración alterada no cuadra.
+	c := append([]inventory.Movement(nil), l.kardex...)
+	c[1].ValueAdjustment = d("6")
+	if err := inventory.Replay(l.b, c); !errors.Is(err, inventory.ErrReplayMismatch) {
+		t.Fatalf("replay: %v", err)
+	}
+	if _, _, err := inventory.Revalue(inventory.Balance{Key: l.b.Key}, mv(l.b.Key, "0"), d("5"), now); !errors.Is(err, inventory.ErrValuation) {
+		t.Errorf("sin existencia: %v", err)
+	}
+}

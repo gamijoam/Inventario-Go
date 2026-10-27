@@ -205,12 +205,12 @@ func (r *orgRepo) InsertMovement(ctx context.Context, m inventory.Movement) erro
 	sc := m.Scope
 	_, err := r.tx.ExecContext(ctx, r.q(
 		"INSERT INTO inventory_movements (organization_id, id, company_id, branch_id, warehouse_id, product_id, sequence, kind, reason, quantity, on_hand_after, note, actor_id, occurred_at_utc, reverses_id, idempotency_key, request_hash, "+
-			"unit_cost, cost, value_adjustment, value_after, transfer_id, reservation_id, block_id, count_id, policy_change_id) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)"),
+			"unit_cost, cost, value_adjustment, value_after, transfer_id, reservation_id, block_id, count_id, policy_change_id, receipt_id) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)"),
 		sc.Organization().String(), m.ID.String(), sc.Company().String(), sc.Branch().String(), sc.Warehouse().String(), m.ProductID.String(),
 		m.Sequence, string(m.Kind), string(m.Reason), dec(m.Quantity), dec(m.OnHandAfter), m.Note, m.ActorID.String(), r.ts(m.OccurredAt),
 		nullID(m.ReversesID), nullString(m.IdempotencyKey), m.RequestHash,
 		amount(m.UnitCost), amount(m.Cost), dec(m.ValueAdjustment), amount(m.ValueAfter), nullID(m.TransferID),
-		nullID(m.ReservationID), nullID(m.BlockID), nullID(m.CountID), nullID(m.PolicyChangeID))
+		nullID(m.ReservationID), nullID(m.BlockID), nullID(m.CountID), nullID(m.PolicyChangeID), nullID(m.ReceiptID))
 	if r.s.isUniqueViolation(err) {
 		// Otro proceso usó la misma clave o revirtió el mismo movimiento:
 		// al reintentar se encontrará su resultado.
@@ -225,18 +225,18 @@ func (r *orgRepo) InsertMovement(ctx context.Context, m inventory.Movement) erro
 const movementCols = "CAST(organization_id AS TEXT), CAST(id AS TEXT), CAST(company_id AS TEXT), CAST(branch_id AS TEXT), CAST(warehouse_id AS TEXT), CAST(product_id AS TEXT), " +
 	"sequence, kind, reason, CAST(quantity AS TEXT), CAST(on_hand_after AS TEXT), note, CAST(actor_id AS TEXT), occurred_at_utc, CAST(reverses_id AS TEXT), idempotency_key, request_hash, " +
 	"CAST(unit_cost AS TEXT), CAST(cost AS TEXT), CAST(value_adjustment AS TEXT), CAST(value_after AS TEXT), CAST(transfer_id AS TEXT), " +
-	"CAST(reservation_id AS TEXT), CAST(block_id AS TEXT), CAST(count_id AS TEXT), CAST(policy_change_id AS TEXT)"
+	"CAST(reservation_id AS TEXT), CAST(block_id AS TEXT), CAST(count_id AS TEXT), CAST(policy_change_id AS TEXT), CAST(receipt_id AS TEXT)"
 
 func scanMovement(sc scanner) (inventory.Movement, error) {
 	var o, mid, c, br, w, p, kind, reason, qty, after, actor, adjustment string
-	var reverses, key, unitCost, cost, valueAfter, transfer, reservation, block, count, policy sql.NullString
+	var reverses, key, unitCost, cost, valueAfter, transfer, reservation, block, count, policy, receipt sql.NullString
 	var occurred any
 	var m inventory.Movement
 	if err := sc.Scan(&o, &mid, &c, &br, &w, &p, &m.Sequence, &kind, &reason, &qty, &after, &m.Note, &actor, &occurred, &reverses, &key, &m.RequestHash,
-		&unitCost, &cost, &adjustment, &valueAfter, &transfer, &reservation, &block, &count, &policy); err != nil {
+		&unitCost, &cost, &adjustment, &valueAfter, &transfer, &reservation, &block, &count, &policy, &receipt); err != nil {
 		return m, err
 	}
-	ids, err := parseIDs(o, mid, c, br, w, p, actor, reverses.String, transfer.String, reservation.String, block.String, count.String, policy.String)
+	ids, err := parseIDs(o, mid, c, br, w, p, actor, reverses.String, transfer.String, reservation.String, block.String, count.String, policy.String, receipt.String)
 	if err != nil {
 		return m, err
 	}
@@ -244,7 +244,7 @@ func scanMovement(sc scanner) (inventory.Movement, error) {
 		return m, err
 	}
 	m.ID, m.ProductID, m.ActorID, m.ReversesID, m.TransferID = ids[1], ids[5], ids[6], ids[7], ids[8]
-	m.ReservationID, m.BlockID, m.CountID, m.PolicyChangeID = ids[9], ids[10], ids[11], ids[12]
+	m.ReservationID, m.BlockID, m.CountID, m.PolicyChangeID, m.ReceiptID = ids[9], ids[10], ids[11], ids[12], ids[13]
 	if m.UnitCost, err = parseAmount(unitCost); err != nil {
 		return m, err
 	}

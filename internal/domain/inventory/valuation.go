@@ -132,6 +132,10 @@ type Costing struct {
 	// AllowUnknown admite una entrada sin costo en un saldo sin valorar
 	// (reverso de una salida que no tenía costo).
 	AllowUnknown bool
+	// ValuesPrior permite que una entrada de costo fijo valore también la
+	// existencia previa sin valor, a su costo unitario: una compra real
+	// puede hacerlo; una transferencia o un reverso, no.
+	ValuesPrior bool
 	// Overdraft es el déficit máximo que una excepción autorizada permite
 	// dejar (DEC-007.F2). Las unidades en déficit salen al último CPP
 	// válido, como costo provisional.
@@ -162,7 +166,7 @@ func valuate(b Balance, q decimal.Decimal, c Costing) (valuation, error) {
 		if cost.IsNegative() {
 			return valuation{}, fmt.Errorf("%w: el costo fijo debe tener el signo de la cantidad", ErrInvalid)
 		}
-		if !cur.Known {
+		if !cur.Known && !c.ValuesPrior {
 			return valuation{}, fmt.Errorf("%w: la existencia del almacén no está valorada; registre antes una entrada con costo unitario", ErrValuation)
 		}
 		uc = Known(unit(cost, q))
@@ -348,7 +352,7 @@ func replayValue(before decimal.Decimal, value, last Amount, m Movement) (Amount
 			if want := settle(prev.Value, before, m.Quantity, m.Cost.Value); !want.Equal(after) {
 				return Amount{}, fmt.Errorf("la liquidación del déficit debía dejar %s y registra %s", want, after)
 			}
-		} else if !adj.IsZero() && !m.OnHandAfter.IsZero() {
+		} else if !adj.IsZero() && !m.OnHandAfter.IsZero() && m.Kind != KindRevaluation {
 			return Amount{}, fmt.Errorf("ajuste de valor %s sin agotar la existencia", adj)
 		}
 		if want := prev.Value.Add(m.Cost.Value).Add(adj); !want.Equal(after) {
