@@ -131,7 +131,7 @@ func newRootCmd(env Env, flags *globalFlags) *cobra.Command {
 
 	root.AddCommand(newVersionCmd(flags), newDoctorCmd(env, flags), newConfigCmd(env, flags), newDBCmd(env, flags),
 		newSetupCmd(env, flags), newAuthCmd(env, flags), newUserCmd(env, flags), newRoleCmd(env, flags),
-		newUnitCmd(env, flags), newProductCmd(env, flags),
+		newUnitCmd(env, flags), newProductCmd(env, flags), newInventoryCmd(env, flags),
 		newOrgCmd(env, flags), newCompanyCmd(env, flags), newBranchCmd(env, flags), newWarehouseCmd(env, flags))
 	return root
 }

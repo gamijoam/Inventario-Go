@@ -91,6 +91,8 @@ const (
 	PermProductRead     Permission = "catalog.product.read"
 	PermProductManage   Permission = "catalog.product.manage"
 	PermUnitManage      Permission = "catalog.unit.manage"
+	PermStockRead       Permission = "inventory.stock.read"
+	PermStockAdjust     Permission = "inventory.stock.adjust"
 	// Extraordinarios: nunca forman parte de una plantilla (sección 26.3).
 	PermApproveBelowCost Permission = "pricing.override.approve_below_cost"
 	PermBackupRestore    Permission = "system.backup.restore"
@@ -114,6 +116,8 @@ var catalog = []PermissionInfo{
 	{PermProductRead, "Ver el catálogo de productos y unidades", false},
 	{PermProductManage, "Crear, editar e inactivar productos (solo con ámbito de organización)", false},
 	{PermUnitManage, "Crear unidades de medida (solo con ámbito de organización)", false},
+	{PermStockRead, "Ver existencias y kardex de los almacenes del ámbito", false},
+	{PermStockAdjust, "Registrar entradas, salidas y reversos de ajuste en los almacenes del ámbito", false},
 	{PermApproveBelowCost, "Aprobar ventas por debajo del costo (DEC-007.B2, nivel N2; uso en M4)", true},
 	{PermBackupRestore, "Restaurar respaldos (uso en M5)", true},
 }
@@ -224,11 +228,11 @@ func Templates() []RoleTemplate {
 	}
 	return []RoleTemplate{
 		{AdminRoleCode, "Administrador de organización", admin},
-		{"ADMIN_EMPRESA", "Administrador de empresa", []Permission{PermOrgRead, PermBranchCreate, PermWarehouseCreate, PermUserRead, PermUserManage, PermProductRead}},
-		{"ENCARGADO", "Encargado", []Permission{PermOrgRead, PermWarehouseCreate, PermUserRead, PermProductRead}},
-		{"CAJERO", "Cajero", []Permission{PermOrgRead, PermProductRead}},
-		{"ALMACENISTA", "Almacenista", []Permission{PermOrgRead, PermProductRead}},
-		{"OPERADOR_TECNICO", "Operador técnico", []Permission{PermOrgRead, PermProductRead}},
+		{"ADMIN_EMPRESA", "Administrador de empresa", []Permission{PermOrgRead, PermBranchCreate, PermWarehouseCreate, PermUserRead, PermUserManage, PermProductRead, PermStockRead, PermStockAdjust}},
+		{"ENCARGADO", "Encargado", []Permission{PermOrgRead, PermWarehouseCreate, PermUserRead, PermProductRead, PermStockRead, PermStockAdjust}},
+		{"CAJERO", "Cajero", []Permission{PermOrgRead, PermProductRead, PermStockRead}},
+		{"ALMACENISTA", "Almacenista", []Permission{PermOrgRead, PermProductRead, PermStockRead, PermStockAdjust}},
+		{"OPERADOR_TECNICO", "Operador técnico", []Permission{PermOrgRead, PermProductRead, PermStockRead}},
 	}
 }
 

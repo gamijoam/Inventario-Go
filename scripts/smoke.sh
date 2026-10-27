@@ -37,6 +37,14 @@ printf '%s\n' "sol y luna 2026" | "$bin" user create --username cajero --name "C
 "$bin" product update P-000001 --sku HAR-1 --revision 1 --json
 "$bin" product show 07591234567894
 "$bin" product list --search harina
+"$bin" inventory in --product HAR-1 --qty 40 --reason initial_load --key carga-1 --json
+"$bin" inventory in --product HAR-1 --qty 40 --reason initial_load --key carga-1 --json   # idempotente
+"$bin" inventory out --product QUE-01 --qty 1 --reason correction >/dev/null 2>&1 && exit 1 || true
+"$bin" inventory in --product QUE-01 --qty 2.5 --reason initial_load
+"$bin" inventory out --product QUE-01 --qty 0.125 --reason shrinkage --note "rotura"
+"$bin" inventory stock
+"$bin" inventory kardex --product QUE-01 --json
+"$bin" inventory verify
 # Un segundo setup debe rechazarse con el código 6 (conflicto).
 set +e; printf '%s\n' "$pw" | "$bin" setup --name Otra --password-stdin >/dev/null 2>&1; code=$?; set -e
 test "$code" -eq 6
@@ -49,6 +57,9 @@ printf '%s\n' "sol y luna 2026" | "$bin" auth login --user cajero --password-std
 set +e; "$bin" warehouse create --code x --name X >/dev/null 2>&1; code=$?; set -e
 test "$code" -eq 8
 "$bin" product show QUE-01
+"$bin" inventory stock --product QUE-01
+set +e; "$bin" inventory out --product QUE-01 --qty 1 --reason correction >/dev/null 2>&1; code=$?; set -e
+test "$code" -eq 8
 set +e; "$bin" product create --name X >/dev/null 2>&1; code=$?; set -e
 test "$code" -eq 8
 "$bin" doctor

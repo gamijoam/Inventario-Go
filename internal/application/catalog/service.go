@@ -218,9 +218,10 @@ func nextSKU(ctx context.Context, r Repository, orgID id.ID) (catalog.SKU, error
 	return catalog.SKU{}, fmt.Errorf("%w: no hay SKU automáticos libres; indique --sku", apporg.ErrConflict)
 }
 
-// resolve busca por SKU, código de barras o ID. Si la referencia coincide
-// con productos distintos, devuelve ErrAmbiguous.
-func resolve(ctx context.Context, r Repository, orgID id.ID, ref string) (catalog.Product, error) {
+// Resolve busca por SKU, código de barras o ID dentro de una transacción
+// ajena. Si la referencia coincide con productos distintos, devuelve
+// ErrAmbiguous.
+func Resolve(ctx context.Context, r Repository, orgID id.ID, ref string) (catalog.Product, error) {
 	var found []catalog.Product
 	add := func(p catalog.Product, err error) error {
 		if errors.Is(err, apporg.ErrNotFound) {
@@ -274,7 +275,7 @@ func (s *Service) ShowProduct(ctx context.Context, p identity.Principal, ref str
 	}
 	var out ProductView
 	err := s.store.InTx(ctx, func(r Repository) error {
-		prod, err := resolve(ctx, r, p.OrganizationID, ref)
+		prod, err := Resolve(ctx, r, p.OrganizationID, ref)
 		if err != nil {
 			return err
 		}
@@ -347,7 +348,7 @@ func (s *Service) UpdateProduct(ctx context.Context, p identity.Principal, o org
 	}
 	var out ProductView
 	err = s.store.InTx(ctx, func(r Repository) error {
-		prod, err := resolve(ctx, r, o.ID, ref)
+		prod, err := Resolve(ctx, r, o.ID, ref)
 		if err != nil {
 			return err
 		}
