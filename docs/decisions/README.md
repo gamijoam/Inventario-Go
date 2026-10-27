@@ -21,5 +21,6 @@ registran cómo se implementan.
 | [0013](0013-compras-recepciones-y-gastos.md) | Compras, recepciones, gastos atribuibles y costo de reposición | Aceptada |
 | [0014](0014-tasas-de-cambio-y-compras-en-otra-moneda.md) | Tasas de cambio versionadas y compras en otra moneda | Aceptada |
 | [0015](0015-listas-de-precios-y-sugerencias-aprobadas.md) | Listas de precios y sugerencias de precio aprobadas | Aceptada |
+| [0016](0016-releases-de-ejecutables.md) | Releases de ejecutables en GitHub | Aceptada |
 
 Estados posibles: *Propuesta*, *Aceptada*, *Reemplazada por ADR-xxxx*, *Rechazada*.

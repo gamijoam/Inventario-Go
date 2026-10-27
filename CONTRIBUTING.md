@@ -44,6 +44,19 @@ modo; ninguna operación mezcla monedas o unidades sin conversión explícita.
 - Sin secretos en código, flags, logs ni historial.
 - Documentación y ADR actualizados si cambia una decisión técnica.
 
+## Releases
+
+Un release se publica empujando una etiqueta sobre un commit de `main`
+(ADR-0016); el workflow `release.yml` prueba, empaqueta y publica:
+
+```sh
+git tag -a v0.3.0-alpha.1 -m "BalanzaPro v0.3.0-alpha.1"
+git push origin v0.3.0-alpha.1
+./scripts/release.sh v0.3.0-alpha.1 dist   # el mismo empaquetado, en local
+```
+
+Las etiquetas con sufijo (`-alpha.1`, `-rc.1`) quedan como prerelease.
+
 ## Decisiones técnicas
 
 Toda decisión de arquitectura, biblioteca o política se registra como ADR en
