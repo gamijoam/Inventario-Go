@@ -148,35 +148,9 @@ func runSetup(cmd *cobra.Command, env Env, flags *globalFlags, in apporg.Bootstr
 	}
 	ctx, cancel := context.WithTimeout(cmd.Context(), dbTimeout)
 	defer cancel()
-
-	store, err := persistence.Open(ctx, rt.loaded.Config.Database, true)
-	if err != nil {
-		return unavailableError(err)
-	}
-	defer store.Close()
-	runner, err := store.Runner()
+	res, err := install(ctx, rt, in, admin)
 	if err != nil {
 		return err
-	}
-	if _, err := runner.Up(ctx); err != nil {
-		return err
-	}
-	if _, _, err := store.EnsureInstallation(ctx); err != nil {
-		return err
-	}
-	_, authSvc := newServices(store)
-	res, err := authSvc.Setup(ctx, in, admin)
-	if err != nil {
-		return appError(err)
-	}
-	rt.logger.Info("instalación configurada", "organization", res.Organization.Code.String(), "branch", res.Branch.Code.String(),
-		"admin", res.Admin.Username.String(), "completed_existing", res.Completed)
-	login, err := authSvc.Login(ctx, res.Admin.Username.String(), admin.Password)
-	if err != nil {
-		return appError(err)
-	}
-	if err := writeSessionFile(rt.loaded.Config.Session.File, login.Token); err != nil {
-		return fmt.Errorf("guardar la sesión: %w", err)
 	}
 
 	if flags.json {
@@ -540,4 +514,40 @@ func codeFromName(name string) string {
 		return "PRINCIPAL"
 	}
 	return code
+}
+
+// install crea la base si hace falta, aplica las migraciones, registra la
+// organización con su administrador y deja su sesión iniciada en este
+// equipo. La usan 'setup' y el asistente de primer uso de la TUI.
+func install(ctx context.Context, rt runtime, in apporg.BootstrapInput, admin auth.AdminInput) (auth.SetupResult, error) {
+	store, err := persistence.Open(ctx, rt.loaded.Config.Database, true)
+	if err != nil {
+		return auth.SetupResult{}, unavailableError(err)
+	}
+	defer store.Close()
+	runner, err := store.Runner()
+	if err != nil {
+		return auth.SetupResult{}, err
+	}
+	if _, err := runner.Up(ctx); err != nil {
+		return auth.SetupResult{}, err
+	}
+	if _, _, err := store.EnsureInstallation(ctx); err != nil {
+		return auth.SetupResult{}, err
+	}
+	_, authSvc := newServices(store)
+	res, err := authSvc.Setup(ctx, in, admin)
+	if err != nil {
+		return res, appError(err)
+	}
+	rt.logger.Info("instalación configurada", "organization", res.Organization.Code.String(), "branch", res.Branch.Code.String(),
+		"admin", res.Admin.Username.String(), "completed_existing", res.Completed)
+	login, err := authSvc.Login(ctx, res.Admin.Username.String(), admin.Password)
+	if err != nil {
+		return res, appError(err)
+	}
+	if err := writeSessionFile(rt.loaded.Config.Session.File, login.Token); err != nil {
+		return res, fmt.Errorf("guardar la sesión: %w", err)
+	}
+	return res, nil
 }

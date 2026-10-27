@@ -23,5 +23,6 @@ registran cómo se implementan.
 | [0015](0015-listas-de-precios-y-sugerencias-aprobadas.md) | Listas de precios y sugerencias de precio aprobadas | Aceptada |
 | [0016](0016-releases-de-ejecutables.md) | Releases de ejecutables en GitHub | Aceptada |
 | [0017](0017-tui-pantallas-y-backend.md) | TUI de pantallas completas sobre un puerto Backend | Aceptada |
+| [0018](0018-tui-estilo-bios-formularios-y-asistente.md) | TUI estilo BIOS, formularios y asistente de primer uso | Aceptada |
 
 Estados posibles: *Propuesta*, *Aceptada*, *Reemplazada por ADR-xxxx*, *Rechazada*.

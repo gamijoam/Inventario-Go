@@ -10,6 +10,7 @@ import (
 	appcatalog "github.com/gamijoam/inventario-go/internal/application/catalog"
 	"github.com/gamijoam/inventario-go/internal/application/stock"
 	"github.com/gamijoam/inventario-go/internal/domain/catalog"
+	"github.com/gamijoam/inventario-go/internal/domain/identity"
 	"github.com/gamijoam/inventario-go/internal/domain/inventory"
 	"github.com/gamijoam/inventario-go/internal/domain/timezone"
 )
@@ -23,7 +24,13 @@ type productsScreen struct {
 	id      int
 	list    listView
 	items   []appcatalog.ProductView
+	units   []catalog.Unit
 	loading bool
+}
+
+type productsData struct {
+	products []appcatalog.ProductView
+	units    []catalog.Unit
 }
 
 func newProducts(a *app) screen {
@@ -34,11 +41,24 @@ func newProducts(a *app) screen {
 
 func (p *productsScreen) Title() string   { return "Productos" }
 func (p *productsScreen) Capturing() bool { return p.list.capturing() }
+func (p *productsScreen) canManage() bool {
+	return p.app.session != nil && p.app.session.Can(identity.PermProductManage)
+}
+func (p *productsScreen) Info() string {
+	s := "Enter abre las existencias del producto y P sus precios. / filtra por nombre, SKU o código."
+	if p.canManage() {
+		s += " F2 crea un producto, F3 lo edita (nombre, SKU, códigos de barras) y F4 lo activa o inactiva."
+	}
+	return s
+}
 func (p *productsScreen) Help() string {
 	if p.list.capturing() {
-		return "escriba para filtrar · enter fijar · esc borrar"
+		return "Escriba para filtrar  Enter Fijar  Esc Borrar"
 	}
-	return "↑/↓ mover · / filtrar · enter existencias · p precios · esc volver"
+	if p.canManage() {
+		return "↑↓ Elegir  / Filtrar  Enter Existencias  P Precios  F2 Nuevo  F3 Editar  F4 Activar/Inactivar  Esc Volver"
+	}
+	return "↑↓ Elegir  / Filtrar  Enter Existencias  P Precios  Esc Volver"
 }
 
 func (p *productsScreen) Init(id int) tea.Cmd {
@@ -49,7 +69,14 @@ func (p *productsScreen) Init(id int) tea.Cmd {
 func (p *productsScreen) Refresh() tea.Cmd {
 	p.loading = true
 	a := p.app
-	return load(p.id, func() (any, error) { return a.opts.Backend.Products(a.ctx, "") })
+	return load(p.id, func() (any, error) {
+		prods, err := a.opts.Backend.Products(a.ctx, "")
+		if err != nil {
+			return nil, err
+		}
+		units, err := a.opts.Backend.Units(a.ctx)
+		return productsData{prods, units}, err
+	})
 }
 
 func (p *productsScreen) Update(msg tea.Msg) tea.Cmd {
@@ -61,7 +88,8 @@ func (p *productsScreen) Update(msg tea.Msg) tea.Cmd {
 		if msg.err != nil {
 			return setStatus("no se pudieron cargar los productos", msg.err)
 		}
-		p.items = msg.v.([]appcatalog.ProductView)
+		d := msg.v.(productsData)
+		p.items, p.units = d.products, d.units
 		rows := make([]table.Row, len(p.items))
 		for i, v := range p.items {
 			state := "activo"
@@ -75,11 +103,22 @@ func (p *productsScreen) Update(msg tea.Msg) tea.Cmd {
 		if cmd, done := p.list.update(msg); done {
 			return cmd
 		}
+		if msg.String() == "f2" && p.canManage() {
+			return push(newProductForm(p.app, p.units))
+		}
 		i := p.list.selected()
 		if i < 0 {
 			return nil
 		}
 		switch msg.String() {
+		case "f3":
+			if p.canManage() {
+				return push(newProductEdit(p.app, p.items[i]))
+			}
+		case "f4":
+			if p.canManage() {
+				return push(newProductToggle(p.app, p.items[i]))
+			}
 		case "enter":
 			return push(newStock(p.app, p.items[i].SKU.String()))
 		case "p":
@@ -96,7 +135,11 @@ func (p *productsScreen) View(int, int) string {
 	if p.loading && len(p.items) == 0 {
 		return "Cargando…"
 	}
-	return p.list.view("No hay productos. Créelos con 'balanzapro product create'.")
+	empty := "No hay productos."
+	if p.canManage() {
+		empty += " Pulse F2 para crear el primero."
+	}
+	return p.list.view(empty)
 }
 
 // ---------- Existencias ----------
@@ -125,11 +168,13 @@ func (s *stockScreen) Title() string {
 	return "Existencias"
 }
 func (s *stockScreen) Capturing() bool { return s.list.capturing() }
+func (s *stockScreen) Wide() bool      { return true }
+
 func (s *stockScreen) Help() string {
 	if s.list.capturing() {
-		return "escriba para filtrar · enter fijar · esc borrar"
+		return "Escriba para filtrar  Enter Fijar  Esc Borrar"
 	}
-	return "↑/↓ mover · / filtrar · enter kardex · r recargar · esc volver"
+	return "↑↓ Elegir  / Filtrar  Enter Kardex  R Recargar  Esc Volver"
 }
 
 func (s *stockScreen) Init(id int) tea.Cmd {
@@ -214,11 +259,13 @@ func (k *kardexScreen) Title() string {
 	return "Kardex de " + k.bal.Product.SKU.String() + " en " + k.bal.Location.String()
 }
 func (k *kardexScreen) Capturing() bool { return k.list.capturing() }
+func (k *kardexScreen) Wide() bool      { return true }
+
 func (k *kardexScreen) Help() string {
 	if k.list.capturing() {
-		return "escriba para filtrar · enter fijar · esc borrar"
+		return "Escriba para filtrar  Enter Fijar  Esc Borrar"
 	}
-	return "↑/↓ mover · / filtrar · r recargar · esc volver"
+	return "↑↓ Elegir  / Filtrar  R Recargar  Esc Volver"
 }
 
 func (k *kardexScreen) Init(id int) tea.Cmd {

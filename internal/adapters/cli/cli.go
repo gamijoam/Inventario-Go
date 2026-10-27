@@ -19,6 +19,8 @@ import (
 
 	"github.com/gamijoam/inventario-go/internal/adapters/tui"
 	"github.com/gamijoam/inventario-go/internal/application/admin"
+	"github.com/gamijoam/inventario-go/internal/application/auth"
+	apporg "github.com/gamijoam/inventario-go/internal/application/org"
 	"github.com/gamijoam/inventario-go/internal/platform/buildinfo"
 	"github.com/gamijoam/inventario-go/internal/platform/config"
 )
@@ -119,16 +121,51 @@ func newRootCmd(env Env, flags *globalFlags) *cobra.Command {
 				Build:   buildinfo.Get(),
 				Doctor:  func(ctx context.Context) admin.Report { return admin.RunDoctor(ctx, doctorChecks(env, flags)) },
 			}
-			// Con la base lista, la TUI da acceso a los módulos; si no, se
-			// queda en diagnóstico y versión y explica por qué.
-			octx, cancel := context.WithTimeout(cmd.Context(), dbTimeout)
-			s, err := openStore(octx, env, flags, io.Discard)
-			cancel()
-			if err != nil {
+			// Con la base lista, la TUI da acceso a los módulos; sin
+			// instalación, abre el asistente de primer uso; si la base no
+			// responde, se queda en diagnóstico y versión y explica por qué.
+			var opened []appSession
+			defer func() {
+				for _, s := range opened {
+					s.close()
+				}
+			}()
+			connect := func(ctx context.Context) (tui.Backend, error) {
+				ctx, cancel := context.WithTimeout(ctx, dbTimeout)
+				defer cancel()
+				s, err := openStore(ctx, env, flags, io.Discard)
+				if err != nil {
+					return nil, err
+				}
+				opened = append(opened, s)
+				return newTUIBackend(s), nil
+			}
+			b, err := connect(cmd.Context())
+			switch {
+			case err == nil:
+				opts.Backend = b
+			case notConfigured(err):
+				// Sin instalación: el asistente de primer uso la crea.
+				opts.Setup = func(ctx context.Context, in tui.SetupInput) (tui.Backend, error) {
+					sctx, cancel := context.WithTimeout(ctx, dbTimeout)
+					defer cancel()
+					user := in.AdminUser
+					if user == "" {
+						user = "admin"
+					}
+					legal := in.LegalName
+					if legal == "" {
+						legal = in.BusinessName
+					}
+					if _, err := install(sctx, rt, apporg.BootstrapInput{OrganizationName: in.BusinessName, OrganizationCode: codeFromName(in.BusinessName),
+						CompanyCode: "PRINCIPAL", CompanyLegalName: legal, RIF: in.RIF, Currency: in.Currency, BranchCode: "PRINCIPAL", BranchName: "Principal",
+						WarehouseCode: "PRINCIPAL", WarehouseName: "Principal"}, auth.AdminInput{Username: user, DisplayName: in.AdminName, Password: in.Password}); err != nil {
+						return nil, err
+					}
+					return connect(ctx)
+				}
+			default:
 				opts.Unavailable = unavailableReason(err)
-			} else {
-				defer s.close()
-				opts.Backend = newTUIBackend(s)
 			}
 			return env.RunTUI(cmd.Context(), env.In, env.Out, opts)
 		},
@@ -192,13 +229,17 @@ func writeJSON(w io.Writer, v any) error {
 	return enc.Encode(v)
 }
 
+// notConfigured indica que falta la base o la organización: lo resuelve
+// el asistente de primer uso.
+func notConfigured(err error) bool {
+	var e *exitError
+	return errors.As(err, &e) && e.code == ExitNotFound
+}
+
 // unavailableReason explica en una línea por qué la TUI no tiene módulos.
 func unavailableReason(err error) string {
 	var e *exitError
 	if errors.As(err, &e) {
-		if e.code == ExitNotFound {
-			return "Instalación sin configurar: " + e.msg + "."
-		}
 		return "Base de datos no disponible: " + e.msg
 	}
 	return "Base de datos no disponible: " + err.Error()

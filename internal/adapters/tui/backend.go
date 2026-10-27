@@ -6,6 +6,7 @@ import (
 	appcatalog "github.com/gamijoam/inventario-go/internal/application/catalog"
 	apppricing "github.com/gamijoam/inventario-go/internal/application/pricing"
 	"github.com/gamijoam/inventario-go/internal/application/stock"
+	"github.com/gamijoam/inventario-go/internal/domain/catalog"
 	"github.com/gamijoam/inventario-go/internal/domain/identity"
 	"github.com/gamijoam/inventario-go/internal/domain/inventory"
 	"github.com/gamijoam/inventario-go/internal/domain/pricing"
@@ -23,6 +24,11 @@ type Backend interface {
 	Logout(ctx context.Context) error
 
 	Products(ctx context.Context, search string) ([]appcatalog.ProductView, error)
+	CreateProduct(ctx context.Context, in appcatalog.NewProduct) (appcatalog.ProductView, error)
+	// UpdateProduct edita un producto por SKU, código de barras o ID.
+	UpdateProduct(ctx context.Context, ref string, c appcatalog.Changes) (appcatalog.ProductView, error)
+	Units(ctx context.Context) ([]catalog.Unit, error)
+	CreateUnit(ctx context.Context, code, name string, scale int32) (catalog.Unit, error)
 	// Stock devuelve los saldos visibles; product vacío, todos.
 	Stock(ctx context.Context, product string) ([]stock.BalanceView, error)
 	Kardex(ctx context.Context, where stock.WarehouseRef, product string) (stock.BalanceView, []inventory.Movement, error)
@@ -46,3 +52,19 @@ type Session struct {
 // Can indica si el usuario tiene perm en algún ámbito; la TUI lo usa para
 // mostrar u ocultar opciones, no para autorizar.
 func (s Session) Can(perm identity.Permission) bool { return s.Principal.HasAnywhere(perm) }
+
+// SetupInput son los datos del asistente de primer uso. Los códigos de
+// empresa, sucursal y almacén toman sus valores por defecto (PRINCIPAL).
+type SetupInput struct {
+	BusinessName string
+	LegalName    string // vacío: el nombre del negocio
+	RIF          string
+	Currency     string // de valoración: USD o VES
+	AdminUser    string
+	AdminName    string
+	Password     string
+}
+
+// Setup crea la instalación, inicia la sesión del administrador y devuelve
+// el backend ya conectado.
+type Setup func(ctx context.Context, in SetupInput) (Backend, error)

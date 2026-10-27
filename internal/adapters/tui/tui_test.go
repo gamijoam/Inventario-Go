@@ -8,6 +8,7 @@ import (
 	"time"
 
 	tea "charm.land/bubbletea/v2"
+	"github.com/charmbracelet/x/ansi"
 
 	"github.com/gamijoam/inventario-go/internal/adapters/tui"
 	"github.com/gamijoam/inventario-go/internal/application/admin"
@@ -32,7 +33,23 @@ var (
 	keyEnter = tea.KeyPressMsg{Code: tea.KeyEnter}
 	keyEsc   = tea.KeyPressMsg{Code: tea.KeyEscape}
 	keyTab   = tea.KeyPressMsg{Code: tea.KeyTab}
+	keyLeft  = tea.KeyPressMsg{Code: tea.KeyLeft}
+	keyRight = tea.KeyPressMsg{Code: tea.KeyRight}
+	keyF2    = tea.KeyPressMsg{Code: tea.KeyF2}
+	keyF3    = tea.KeyPressMsg{Code: tea.KeyF3}
+	keyF4    = tea.KeyPressMsg{Code: tea.KeyF4}
+	keyF10   = tea.KeyPressMsg{Code: tea.KeyF10}
+	keyBack  = tea.KeyPressMsg{Code: tea.KeyBackspace}
 )
+
+// keys envía varias pulsaciones seguidas.
+func keys(t *testing.T, m tea.Model, ks ...tea.Msg) tea.Model {
+	t.Helper()
+	for _, k := range ks {
+		m, _ = send(t, m, k)
+	}
+	return m
+}
 
 func key(r rune) tea.KeyPressMsg { return tea.KeyPressMsg{Code: r, Text: string(r)} }
 
@@ -90,7 +107,8 @@ func runCmd(c tea.Cmd) tea.Msg {
 	}
 }
 
-func content(m tea.Model) string { return m.View().Content }
+// content es la pantalla sin secuencias de estilo.
+func content(m tea.Model) string { return ansi.Strip(m.View().Content) }
 
 func start(t *testing.T, opts tui.Options) tea.Model {
 	t.Helper()
@@ -120,7 +138,7 @@ func mustContain(t *testing.T, m tea.Model, want ...string) {
 
 func withoutBackend(t *testing.T, doctorCalls *int) tea.Model {
 	return start(t, tui.Options{
-		Unavailable: "Instalación sin configurar: ejecute 'balanzapro setup'.",
+		Unavailable: "Base de datos no disponible: connection refused",
 		Doctor: func(context.Context) admin.Report {
 			*doctorCalls++
 			return admin.Report{Checks: []admin.Result{{Name: "timezone", Status: admin.StatusOK, Detail: "America/Caracas"}}}
@@ -131,12 +149,14 @@ func withoutBackend(t *testing.T, doctorCalls *int) tea.Model {
 func TestWithoutDatabaseOnlyDiagnosticsAndVersion(t *testing.T) {
 	calls := 0
 	m := withoutBackend(t, &calls)
-	mustContain(t, m, "> 1. Diagnóstico", "2. Versión", "3. Salir", "ejecute 'balanzapro setup'")
-	if strings.Contains(content(m), "Productos") {
-		t.Fatal("sin base no debe ofrecer módulos")
+	mustContain(t, m, "Sistema", "► Diagnóstico", "Versión", "Salir", "Base de datos no disponible", "Verifica configuración")
+	for _, hidden := range []string{"Productos", "Inventario", "Precios", "Cerrar sesión"} {
+		if strings.Contains(content(m), hidden) {
+			t.Fatalf("sin base no debe ofrecer %q:\n%s", hidden, content(m))
+		}
 	}
 	m, _ = send(t, m, keyUp)
-	mustContain(t, m, "> 3. Salir")
+	mustContain(t, m, "► Salir", "Cierra BalanzaPro")
 	m, _ = send(t, m, keyDown)
 	m, _ = send(t, m, keyEnter)
 	if calls != 1 {
@@ -147,11 +167,10 @@ func TestWithoutDatabaseOnlyDiagnosticsAndVersion(t *testing.T) {
 	if calls != 2 {
 		t.Fatalf("r debe repetir el diagnóstico: %d", calls)
 	}
-	m, _ = send(t, m, keyEsc)
-	m, _ = send(t, m, key('2'))
+	m = keys(t, m, keyEsc, keyDown, keyEnter)
 	mustContain(t, m, "v0.0.0-test", "desconocido")
 	m, _ = send(t, m, keyEsc)
-	mustContain(t, m, "> 2. Versión")
+	mustContain(t, m, "► Versión")
 }
 
 func TestQuitKeys(t *testing.T) {
@@ -199,6 +218,10 @@ type fake struct {
 	approved  []apppricing.ApproveInput
 	rejected  []string
 	prop      apppricing.ProposalView
+	products  []appcatalog.ProductView
+	units     []catalog.Unit
+	created   []appcatalog.NewProduct
+	changes   []appcatalog.Changes
 }
 
 var (
@@ -234,7 +257,9 @@ func mustCode(s string) org.Code {
 
 func newFake(perms ...identity.Permission) *fake {
 	cost := decimal.MustParse("9.6")
-	f := &fake{perms: perms}
+	arroz := catalog.Product{ID: id.MustNew(), SKU: mustSKU("ARROZ"), Name: mustName("Arroz 1 kg"), Status: catalog.StatusActive, Revision: 3}
+	f := &fake{perms: perms, units: []catalog.Unit{und, {Code: "KG", Name: mustName("Kilogramo"), Scale: 3}},
+		products: []appcatalog.ProductView{{Product: harina, Unit: und}, {Product: arroz, Unit: und}}}
 	f.prop = apppricing.ProposalView{
 		Proposal: pricing.Proposal{Number: "PP-000002", Kind: pricing.KindSuggested, Status: pricing.ProposalPending, Current: &ten,
 			Price: decimal.MustParse("12"), Reference: &pricing.Reference{Basis: pricing.BasisLastPurchase, Cost: cost, Currency: money.USD, ListCost: cost}},
@@ -270,8 +295,49 @@ func (f *fake) Login(_ context.Context, user, pw string) (tui.Session, error) {
 func (f *fake) Logout(context.Context) error { f.loggedOut = true; return nil }
 
 func (f *fake) Products(context.Context, string) ([]appcatalog.ProductView, error) {
-	arroz := catalog.Product{ID: id.MustNew(), SKU: mustSKU("ARROZ"), Name: mustName("Arroz 1 kg"), Status: catalog.StatusActive}
-	return []appcatalog.ProductView{{Product: harina, Unit: und}, {Product: arroz, Unit: und}}, nil
+	return append([]appcatalog.ProductView(nil), f.products...), nil
+}
+
+func (f *fake) CreateProduct(_ context.Context, in appcatalog.NewProduct) (appcatalog.ProductView, error) {
+	if in.Name == "" {
+		return appcatalog.ProductView{}, errors.New("dato de catálogo inválido: el nombre es obligatorio")
+	}
+	f.created = append(f.created, in)
+	sku := in.SKU
+	if sku == "" {
+		sku = "P-000003"
+	}
+	v := appcatalog.ProductView{Product: catalog.Product{ID: id.MustNew(), SKU: mustSKU(sku), Name: mustName(in.Name), Status: catalog.StatusActive}, Unit: und}
+	f.products = append(f.products, v)
+	return v, nil
+}
+
+func (f *fake) UpdateProduct(_ context.Context, ref string, c appcatalog.Changes) (appcatalog.ProductView, error) {
+	for i, v := range f.products {
+		if v.ID.String() != ref {
+			continue
+		}
+		f.changes = append(f.changes, c)
+		if c.Name != nil {
+			v.Name = mustName(*c.Name)
+		}
+		if c.Active != nil && !*c.Active {
+			v.Status = catalog.StatusInactive
+		}
+		f.products[i] = v
+		return v, nil
+	}
+	return appcatalog.ProductView{}, errors.New("producto no encontrado")
+}
+
+func (f *fake) Units(context.Context) ([]catalog.Unit, error) {
+	return append([]catalog.Unit(nil), f.units...), nil
+}
+
+func (f *fake) CreateUnit(_ context.Context, code, name string, scale int32) (catalog.Unit, error) {
+	u := catalog.Unit{Code: code, Name: mustName(name), Scale: scale}
+	f.units = append(f.units, u)
+	return u, nil
 }
 
 func (f *fake) balance() stock.BalanceView {
@@ -347,15 +413,21 @@ func TestLoginShowsErrorsAndHidesThePassword(t *testing.T) {
 	mustContain(t, m, "usuario o contraseña incorrectos", "Iniciar sesión")
 	m = typeText(t, m, "clave segura")
 	m, _ = send(t, m, keyEnter)
-	mustContain(t, m, "Hola, Administrador.", "admin · PRINCIPAL/PRINCIPAL", "Productos", "Propuestas de precio", "Cerrar sesión")
+	mustContain(t, m, "Hola, Administrador.", "admin · PRINCIPAL/PRINCIPAL", "Inventario", "Precios", "Sistema", "► Productos", "Unidades de medida")
+	m, _ = send(t, m, keyRight)
+	mustContain(t, m, "► Precios vigentes", "Propuestas de precio")
+	m, _ = send(t, m, keyRight)
+	mustContain(t, m, "► Diagnóstico", "Cerrar sesión")
+	m, _ = send(t, m, keyRight) // vuelve al primero
+	mustContain(t, m, "► Productos")
 }
 
 func TestSavedSessionSkipsLoginAndMenuFollowsPermissions(t *testing.T) {
 	f := newFake(identity.PermStockRead)
 	f.saved = true
 	m := start(t, tui.Options{Backend: f})
-	mustContain(t, m, "Existencias", "Cerrar sesión")
-	for _, hidden := range []string{"Productos", "Precios", "Iniciar sesión"} {
+	mustContain(t, m, "Inventario", "► Existencias y kardex", "Sistema")
+	for _, hidden := range []string{"Productos", "Unidades", "Precios", "Iniciar sesión"} {
 		if strings.Contains(content(m), hidden) {
 			t.Errorf("no debía mostrarse %q:\n%s", hidden, content(m))
 		}
@@ -364,7 +436,7 @@ func TestSavedSessionSkipsLoginAndMenuFollowsPermissions(t *testing.T) {
 
 func TestProductsFilterStockAndKardex(t *testing.T) {
 	m := login(t, newFake(all...))
-	m, _ = send(t, m, key('1')) // Productos
+	m, _ = send(t, m, keyEnter) // Productos
 	mustContain(t, m, "Productos", "HARINA", "ARROZ", "2 en total")
 	m, _ = send(t, m, key('/'))
 	m = typeText(t, m, "arroz q") // q escribe en el filtro, no sale
@@ -375,9 +447,8 @@ func TestProductsFilterStockAndKardex(t *testing.T) {
 	m, _ = send(t, m, keyEnter)
 	mustContain(t, m, "1 de 2", "ARROZ")
 	m, _ = send(t, m, keyEsc) // con el filtro fijado, Esc vuelve al menú
-	mustContain(t, m, "1. Productos")
-	m, _ = send(t, m, key('1'))
-	m, _ = send(t, m, keyEnter) // existencias de HARINA
+	mustContain(t, m, "► Productos")
+	m = keys(t, m, keyEnter, keyEnter) // existencias de HARINA
 	mustContain(t, m, "Existencias de HARINA", "PRINCIPAL/PRINCIPAL", "8.800000", "176.00 USD")
 	m, _ = send(t, m, keyEnter) // kardex
 	mustContain(t, m, "Kardex de HARINA", "compra", "RC-000001")
@@ -388,10 +459,10 @@ func TestProductsFilterStockAndKardex(t *testing.T) {
 func TestApproveAProposal(t *testing.T) {
 	f := newFake(all...)
 	m := login(t, f)
-	m, _ = send(t, m, key('4')) // Propuestas
+	m = keys(t, m, keyRight, keyDown, keyEnter) // Precios › Propuestas
 	mustContain(t, m, "PP-000002", "10 → 12 USD", "recepción")
 	m, _ = send(t, m, keyEnter)
-	mustContain(t, m, "Propuesta PP-000002", "último costo de compra 9.6 USD", "a aprobar")
+	mustContain(t, m, "Propuesta PP-000002", "último costo de compra 9.6 USD", "A Aprobar")
 	m, _ = send(t, m, key('a'))
 	mustContain(t, m, "Confirme la aprobación", "Precio (USD):")
 	m, _ = send(t, m, keyTab)
@@ -406,7 +477,7 @@ func TestApproveAProposal(t *testing.T) {
 		t.Fatalf("aprobaciones: %+v", f.approved)
 	}
 	mustContain(t, m, "PP-000002 aprobada", "aprobada")
-	if strings.Contains(content(m), "a aprobar") {
+	if strings.Contains(content(m), "A Aprobar") {
 		t.Fatal("una propuesta aprobada no ofrece aprobarla de nuevo")
 	}
 }
@@ -414,8 +485,7 @@ func TestApproveAProposal(t *testing.T) {
 func TestRejectAProposalAndCancel(t *testing.T) {
 	f := newFake(all...)
 	m := login(t, f)
-	m, _ = send(t, m, key('4'))
-	m, _ = send(t, m, keyEnter)
+	m = keys(t, m, keyRight, keyDown, keyEnter, keyEnter)
 	m, _ = send(t, m, key('x'))
 	m, _ = send(t, m, keyEsc) // cancelar
 	mustContain(t, m, "rechazo cancelado", "Propuesta PP-000002")
@@ -432,11 +502,11 @@ func TestReadOnlyUserCannotDecide(t *testing.T) {
 	f := newFake(identity.PermPriceRead)
 	f.saved = true
 	m := start(t, tui.Options{Backend: f})
-	m, _ = send(t, m, key('2')) // Propuestas (Precios es la 1)
-	m, _ = send(t, m, keyEnter)
+	mustContain(t, m, "Precios", "► Precios vigentes") // sin Inventario, Precios es el primero
+	m = keys(t, m, keyDown, keyEnter, keyEnter)
 	mustContain(t, m, "Propuesta PP-000002")
 	m, _ = send(t, m, key('a'))
-	if strings.Contains(content(m), "Confirme") || strings.Contains(content(m), "a aprobar") {
+	if strings.Contains(content(m), "Confirme") || strings.Contains(content(m), "A Aprobar") {
 		t.Fatalf("sin permiso no debe ofrecer aprobar:\n%s", content(m))
 	}
 }
@@ -444,9 +514,178 @@ func TestReadOnlyUserCannotDecide(t *testing.T) {
 func TestLogout(t *testing.T) {
 	f := newFake(all...)
 	m := login(t, f)
-	m, _ = send(t, m, key('7')) // Cerrar sesión
+	m = keys(t, m, keyLeft, keyDown, keyDown) // Sistema, el último menú
+	mustContain(t, m, "► Cerrar sesión")
+	m, _ = send(t, m, keyEnter)
 	if !f.loggedOut {
 		t.Fatal("no cerró la sesión")
 	}
 	mustContain(t, m, "Iniciar sesión", "sesión cerrada")
+}
+
+// ---------- Asistente de primer uso ----------
+
+func TestSetupWizardConfiguresAndLogsIn(t *testing.T) {
+	var got []tui.SetupInput
+	f := newFake(all...)
+	m := start(t, tui.Options{Setup: func(_ context.Context, in tui.SetupInput) (tui.Backend, error) {
+		got = append(got, in)
+		if in.BusinessName == "Falla" {
+			return nil, errors.New("la base no responde")
+		}
+		f.saved = true
+		return f, nil
+	}})
+	mustContain(t, m, "Configuración inicial", "Nombre del negocio", "Moneda de valoración", "‹ USD ›", "admin", "Administrador")
+	m, _ = send(t, m, keyF10)
+	mustContain(t, m, "indique el nombre del negocio")
+	m = typeText(t, m, "Falla")
+	m, _ = send(t, m, keyF10)
+	mustContain(t, m, "la base no responde", "Configuración inicial") // sigue abierto
+	for range 5 {
+		m, _ = send(t, m, keyBack)
+	}
+	m = typeText(t, m, "Bodega Ana")
+	m = keys(t, m, keyEnter, keyEnter) // razón social y RIF vacíos
+	m = typeText(t, m, "J-12345678-9")
+	m = keys(t, m, keyEnter, keyRight) // moneda
+	mustContain(t, m, "‹ VES ›")
+	m = keys(t, m, keyEnter, keyEnter, keyEnter) // usuario y nombre por defecto
+	m = typeText(t, m, "clave segura")
+	m, _ = send(t, m, keyEnter)
+	m = typeText(t, m, "otra clave")
+	if strings.Contains(content(m), "clave") {
+		t.Fatal("las contraseñas no deben verse")
+	}
+	m, _ = send(t, m, keyEnter)
+	mustContain(t, m, "las contraseñas no coinciden")
+	for range len("otra clave") {
+		m, _ = send(t, m, keyBack)
+	}
+	m = typeText(t, m, "clave segura")
+	m, _ = send(t, m, keyEnter)
+	want := tui.SetupInput{BusinessName: "Bodega Ana", RIF: "J-12345678-9", Currency: "VES", AdminUser: "admin", AdminName: "Administrador", Password: "clave segura"}
+	if len(got) != 2 || got[1] != want {
+		t.Fatalf("setup: %+v", got)
+	}
+	mustContain(t, m, "Hola, Administrador.", "► Productos")
+	m = keys(t, m, keyLeft, keyDown, keyDown, keyEnter) // Cerrar sesión: el backend ya es el nuevo
+	if !f.loggedOut {
+		t.Fatal("tras el asistente la TUI debe usar el backend configurado")
+	}
+}
+
+func TestSetupWizardEscQuits(t *testing.T) {
+	m := start(t, tui.Options{Setup: func(context.Context, tui.SetupInput) (tui.Backend, error) { return nil, nil }})
+	if _, last := send(t, m, keyEsc); last == nil {
+		t.Fatal("Esc en el asistente debe salir")
+	} else if _, ok := last.(tea.QuitMsg); !ok {
+		t.Fatalf("se esperaba QuitMsg, obtuvo %T", last)
+	}
+}
+
+// ---------- Catálogo ----------
+
+var manager = append([]identity.Permission{identity.PermProductManage, identity.PermUnitManage}, all...)
+
+func TestCreateProduct(t *testing.T) {
+	f := newFake(manager...)
+	m := login(t, f)
+	m, _ = send(t, m, keyEnter) // Productos
+	mustContain(t, m, "F2 Nuevo", "F3 Editar", "F4 Activar/Inactivar")
+	m, _ = send(t, m, keyF2)
+	mustContain(t, m, "Nuevo producto", "vacío: automático", "‹ UND ›")
+	m, _ = send(t, m, keyF10)
+	mustContain(t, m, "el nombre es obligatorio", "Nuevo producto")
+	m = typeText(t, m, "Café 500 g")
+	m = keys(t, m, keyEnter, keyEnter, keyRight) // SKU vacío, unidad KG
+	mustContain(t, m, "‹ KG ›")
+	m, _ = send(t, m, keyEnter)
+	m = typeText(t, m, "7591234567890, 7590000000017")
+	m, _ = send(t, m, keyEnter)
+	if len(f.created) != 1 {
+		t.Fatalf("altas: %+v", f.created)
+	}
+	c := f.created[0]
+	if c.Name != "Café 500 g" || c.SKU != "" || c.UnitCode != "KG" || len(c.Barcodes) != 2 || c.Barcodes[1] != "7590000000017" {
+		t.Fatalf("alta: %+v", c)
+	}
+	mustContain(t, m, "producto creado: P-000003 Café 500 g", "P-000003", "3 en total")
+}
+
+func TestCancelProductFormSavesNothing(t *testing.T) {
+	f := newFake(manager...)
+	m := login(t, f)
+	m = keys(t, m, keyEnter, keyF2)
+	m = typeText(t, m, "Algo q") // q escribe, no sale
+	m, _ = send(t, m, keyEsc)
+	if len(f.created) != 0 {
+		t.Fatal("cancelar no debe guardar")
+	}
+	mustContain(t, m, "cancelado; no se guardó nada", "2 en total")
+}
+
+func TestEditAndInactivateProduct(t *testing.T) {
+	f := newFake(manager...)
+	m := login(t, f)
+	m = keys(t, m, keyEnter, keyDown, keyF3) // ARROZ
+	mustContain(t, m, "Editar ARROZ", "Unidad: UND", "ninguno")
+	m = typeText(t, m, " blanco")
+	m = keys(t, m, keyEnter, keyEnter)
+	m = typeText(t, m, "7591111111116")
+	m = keys(t, m, keyF10)
+	if len(f.changes) != 1 {
+		t.Fatalf("cambios: %+v", f.changes)
+	}
+	c := f.changes[0]
+	if c.Name == nil || *c.Name != "Arroz 1 kg blanco" || c.SKU != nil || c.ExpectedRevision != 3 || len(c.AddBarcodes) != 1 || c.Active != nil {
+		t.Fatalf("cambio: %+v", c)
+	}
+	mustContain(t, m, "producto actualizado: ARROZ", "Arroz 1 kg blanco")
+
+	m, _ = send(t, m, keyF4)
+	mustContain(t, m, "¿Inactivar ARROZ", "no se puede comprar ni vender")
+	m, _ = send(t, m, keyEsc)
+	mustContain(t, m, "cancelado")
+	if len(f.changes) != 1 {
+		t.Fatal("cancelar no debe inactivar")
+	}
+	m = keys(t, m, keyF4, keyEnter)
+	if len(f.changes) != 2 || f.changes[1].Active == nil || *f.changes[1].Active {
+		t.Fatalf("inactivar: %+v", f.changes)
+	}
+	mustContain(t, m, "producto ARROZ inactivado", "inactivo")
+}
+
+func TestReadOnlyCatalog(t *testing.T) {
+	f := newFake(all...)
+	m := login(t, f)
+	m = keys(t, m, keyEnter, keyF2, keyF3, keyF4)
+	mustContain(t, m, "Productos", "2 en total")
+	if v := content(m); strings.Contains(v, "F2") || strings.Contains(v, "Nuevo producto") {
+		t.Fatalf("sin permiso no debe ofrecer altas ni ediciones:\n%s", v)
+	}
+	m = keys(t, m, keyEsc, keyDown, keyEnter, keyF2) // Unidades
+	mustContain(t, m, "Unidades de medida", "UND", "KG")
+	if strings.Contains(content(m), "Nueva unidad") {
+		t.Fatal("sin permiso no debe crear unidades")
+	}
+}
+
+func TestCreateUnit(t *testing.T) {
+	f := newFake(manager...)
+	m := login(t, f)
+	m = keys(t, m, keyDown, keyEnter)
+	mustContain(t, m, "Unidades de medida", "Kilogramo", "F2 Nueva")
+	m, _ = send(t, m, keyF2)
+	m = typeText(t, m, "LT")
+	m, _ = send(t, m, keyEnter)
+	m = typeText(t, m, "Litro")
+	m = keys(t, m, keyEnter, keyRight, keyRight, keyRight)
+	mustContain(t, m, "‹ 3 ›")
+	m, _ = send(t, m, keyEnter)
+	if len(f.units) != 3 || f.units[2] != (catalog.Unit{Code: "LT", Name: mustName("Litro"), Scale: 3}) {
+		t.Fatalf("unidades: %+v", f.units)
+	}
+	mustContain(t, m, "unidad creada: LT", "Litro")
 }
