@@ -534,6 +534,17 @@ func LateShare(a Allocation, received, onHand decimal.Decimal) Allocation {
 	return a
 }
 
+// LastPurchase es el último costo de compra de un producto en una empresa:
+// la línea confirmada más reciente.
+type LastPurchase struct {
+	UnitCost   decimal.Decimal // costo de compra en la moneda del documento, sin gastos
+	Currency   money.Currency  // del documento
+	ValuedUnit decimal.Decimal // costo de compra en la moneda de valoración
+	TotalUnit  decimal.Decimal // en la moneda de valoración, con gastos capitalizados al recibir
+	Receipt    string
+	ReceivedAt time.Time
+}
+
 // ---------- Costo de reposición ----------
 
 // ReplacementCost es una estimación comercial del costo de volver a

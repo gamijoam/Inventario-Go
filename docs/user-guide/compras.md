@@ -2,7 +2,9 @@
 
 La **recepción confirmada** es lo único que mueve existencia: cada producto
 entra al almacén con su costo de compra más los gastos que le corresponden,
-y el costo promedio (CPP) se recalcula. El precio de venta **no cambia**.
+y el costo promedio (CPP) se recalcula. El precio de venta **no cambia**: la
+confirmación deja propuestas de precio que un usuario autorizado aprueba
+(vea [Listas y precios](precios.md)).
 
 Cada documento va en su moneda: por defecto, la de valoración de la
 empresa. Al confirmar, una compra en otra moneda se convierte con la tasa
@@ -93,8 +95,8 @@ balanzapro purchase cost set-replacement --product HARINA --unit-cost 1.35 --not
 | Último costo de compra | Lo pagado en la última recepción, en su moneda y convertido, con y sin gastos | Recepciones confirmadas |
 | Costo de reposición | Estimación de lo que costaría volver a comprar, en su moneda | Registro manual, con historial |
 
-El costo de reposición no cambia el costo promedio ni los precios; servirá
-para las sugerencias de precio (BP-M3-003).
+El costo de reposición no cambia el costo promedio ni los precios; es la
+base preferida de las sugerencias de precio.
 
 ## Permisos
 

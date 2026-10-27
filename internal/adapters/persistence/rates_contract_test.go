@@ -247,8 +247,12 @@ func TestPurchaseInAnotherCurrency(t *testing.T) {
 		if err != nil {
 			t.Fatal(err)
 		}
-		if _, err := runner.Down(c, 1); err == nil {
+		// La 0010 (precios) se revierte primero; la 0009 se niega.
+		if _, err := runner.Down(c, 2); err == nil {
 			t.Fatal("la reversión con documentos en VES debía fallar")
+		}
+		if _, err := runner.Up(c); err != nil {
+			t.Fatal(err)
 		}
 		if again, err := e.buy.ShowReceipt(c, e.admin, r.Number); err != nil || again.Currency != money.VES {
 			t.Fatalf("tras la reversión fallida: %v %v", again.Currency, err)
