@@ -14,5 +14,6 @@ registran cómo se implementan.
 | [0006](0006-persistencia-sqlite-postgres.md) | Drivers, conexión y migraciones para SQLite y PostgreSQL | Aceptada |
 | [0007](0007-jerarquia-organizacional.md) | Jerarquía organizacional y aislamiento por ámbito | Aceptada |
 | [0008](0008-identidad-y-rbac.md) | Usuarios, contraseñas, sesiones y permisos por ámbito | Aceptada |
+| [0009](0009-catalogo-basico.md) | Catálogo básico: productos, SKU, códigos de barras y unidades | Aceptada |
 
 Estados posibles: *Propuesta*, *Aceptada*, *Reemplazada por ADR-xxxx*, *Rechazada*.
