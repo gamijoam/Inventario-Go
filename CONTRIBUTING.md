@@ -55,7 +55,9 @@ git push origin v0.3.0-alpha.1
 ./scripts/release.sh v0.3.0-alpha.1 dist   # el mismo empaquetado, en local
 ```
 
-Las etiquetas con sufijo (`-alpha.1`, `-rc.1`) quedan como prerelease.
+También se puede lanzar desde GitHub: Actions → Release → Run workflow sobre
+`main`, con la versión; el workflow crea la etiqueta. Las versiones con sufijo
+(`-alpha.1`, `-rc.1`) quedan como prerelease.
 
 ## Decisiones técnicas
 

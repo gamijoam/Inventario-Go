@@ -1,16 +1,26 @@
 name: Release
 
-# Publica un release al empujar una etiqueta vX.Y.Z o vX.Y.Z-pre (ADR-0016).
-# Las etiquetas con sufijo (-alpha.1, -rc.1…) quedan como prerelease.
+# Publica un release al empujar una etiqueta vX.Y.Z o vX.Y.Z-pre, o a mano
+# desde Actions ("Run workflow" sobre main, indicando la versión): entonces
+# el propio workflow crea la etiqueta en ese commit (ADR-0016). Las versiones
+# con sufijo (-alpha.1, -rc.1…) quedan como prerelease.
 on:
   push:
     tags: ["v*"]
+  workflow_dispatch:
+    inputs:
+      version:
+        description: "Versión a publicar, p. ej. v0.3.0-alpha.1"
+        required: true
 
 permissions:
   contents: read
 
+env:
+  VERSION: ${{ inputs.version || github.ref_name }}
+
 concurrency:
-  group: release-${{ github.ref }}
+  group: release-${{ inputs.version || github.ref_name }}
   cancel-in-progress: false
 
 jobs:
@@ -24,8 +34,21 @@ jobs:
       - uses: actions/setup-go@v5
         with:
           go-version-file: go.mod
-      - name: La etiqueta apunta a un commit de main
-        run: git merge-base --is-ancestor "$GITHUB_SHA" origin/main
+      - name: Versión válida, sobre un commit de main y sin release previo
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          case "$VERSION" in
+            v[0-9]*.[0-9]*.[0-9]*) ;;
+            *) echo "versión inválida: $VERSION" >&2; exit 1 ;;
+          esac
+          if [ "$GITHUB_EVENT_NAME" = workflow_dispatch ] && [ "$GITHUB_REF" != refs/heads/main ]; then
+            echo "lance el workflow sobre main" >&2; exit 1
+          fi
+          git merge-base --is-ancestor "$GITHUB_SHA" origin/main
+          if gh release view "$VERSION" >/dev/null 2>&1; then
+            echo "el release $VERSION ya existe" >&2; exit 1
+          fi
       - name: go test
         run: go test ./...
       - name: Prueba de humo del ejecutable
@@ -43,19 +66,20 @@ jobs:
         with:
           go-version-file: go.mod
       - name: Empaquetar
-        run: ./scripts/release.sh "$GITHUB_REF_NAME" dist
+        run: ./scripts/release.sh "$VERSION" dist
       - name: Crear el release
         env:
           GH_TOKEN: ${{ github.token }}
         run: |
           pre=""
-          case "$GITHUB_REF_NAME" in *-*) pre="--prerelease" ;; esac
+          case "$VERSION" in *-*) pre="--prerelease" ;; esac
           {
-            echo "Ejecutables de BalanzaPro $GITHUB_REF_NAME para Windows y Linux (amd64)."
+            echo "Ejecutables de BalanzaPro $VERSION para Windows y Linux (amd64)."
             echo
-            echo "**No apto para producción.** Descargue el .zip (Windows) o el .tar.gz (Linux), compruebe la suma en SHA256SUMS y siga la guía [Instalar y probar](https://github.com/$GITHUB_REPOSITORY/blob/$GITHUB_REF_NAME/docs/user-guide/instalar.md)."
+            echo "**No apto para producción.** Descargue el .zip (Windows) o el .tar.gz (Linux), compruebe la suma en SHA256SUMS y siga la guía [Instalar y probar](https://github.com/$GITHUB_REPOSITORY/blob/$GITHUB_SHA/docs/user-guide/instalar.md)."
             echo
             echo "El ejecutable no está firmado: Windows SmartScreen puede advertirlo la primera vez."
           } > notes.md
-          gh release create "$GITHUB_REF_NAME" dist/*.zip dist/*.tar.gz dist/SHA256SUMS \
-            --title "BalanzaPro $GITHUB_REF_NAME" --notes-file notes.md --generate-notes $pre
+          # --target crea la etiqueta en este commit si todavía no existe.
+          gh release create "$VERSION" dist/*.zip dist/*.tar.gz dist/SHA256SUMS --target "$GITHUB_SHA" \
+            --title "BalanzaPro $VERSION" --notes-file notes.md --generate-notes $pre
