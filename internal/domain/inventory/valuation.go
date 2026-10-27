@@ -119,8 +119,9 @@ func ParseUnitCost(s string) (decimal.Decimal, error) {
 	return c, nil
 }
 
-// Costing indica cómo valorar un movimiento. El valor cero valora al CPP
-// vigente: así salen todas las salidas y entran las entradas sin costo.
+// Costing indica cómo valorar un movimiento y, en una salida, qué la
+// autoriza más allá del disponible. El valor cero valora al CPP vigente:
+// así salen todas las salidas y entran las entradas sin costo.
 type Costing struct {
 	// UnitCost es el costo unitario declarado de una entrada.
 	UnitCost Amount
@@ -131,6 +132,13 @@ type Costing struct {
 	// AllowUnknown admite una entrada sin costo en un saldo sin valorar
 	// (reverso de una salida que no tenía costo).
 	AllowUnknown bool
+	// Overdraft es el déficit máximo que una excepción autorizada permite
+	// dejar (DEC-007.F2). Las unidades en déficit salen al último CPP
+	// válido, como costo provisional.
+	Overdraft Amount
+	// Correction es un ajuste por conteo: refleja lo que hay aunque deje lo
+	// reservado o bloqueado sin respaldo, sin llegar a existencia negativa.
+	Correction bool
 }
 
 type valuation struct {
@@ -141,15 +149,99 @@ type valuation struct {
 func valuate(b Balance, q decimal.Decimal, c Costing) (valuation, error) {
 	cur := normalized(b.OnHand, b.Value)
 	after := b.OnHand.Add(q)
-	in := q.Sign() > 0
+	if q.Sign() < 0 {
+		return valuateExit(b, cur, q, after, c)
+	}
+
+	// Entrada: primero su costo total.
+	var cost decimal.Decimal
+	var uc Amount
 	switch {
 	case c.Fixed.Known:
-		cost := c.Fixed.Value
-		if cost.Sign() != 0 && cost.Sign() != q.Sign() {
+		cost = c.Fixed.Value
+		if cost.IsNegative() {
 			return valuation{}, fmt.Errorf("%w: el costo fijo debe tener el signo de la cantidad", ErrInvalid)
 		}
 		if !cur.Known {
 			return valuation{}, fmt.Errorf("%w: la existencia del almacén no está valorada; registre antes una entrada con costo unitario", ErrValuation)
+		}
+		uc = Known(unit(cost, q))
+	case c.UnitCost.Known:
+		if c.UnitCost.Value.IsNegative() {
+			return valuation{}, fmt.Errorf("%w: el costo unitario no puede ser negativo", ErrInvalid)
+		}
+		uc = c.UnitCost
+		cost = q.Mul(uc.Value).Round(ValueScale, valueRounding)
+	default:
+		cpp := b.UnitCost()
+		if !cpp.Known {
+			if !cur.Known && c.AllowUnknown {
+				return valuation{}, nil
+			}
+			return valuation{}, ErrCostRequired
+		}
+		uc, cost = cpp, share(cur.Value, q, b.OnHand)
+	}
+	v := valuation{unitCost: uc, cost: Known(cost)}
+	switch {
+	case !cur.Known:
+		// La primera entrada con costo valora también la existencia previa.
+		v.adjustment = b.OnHand.Mul(uc.Value).Round(ValueScale, valueRounding)
+		v.after = Known(cost.Add(v.adjustment))
+	case b.OnHand.IsNegative():
+		v.after = Known(settle(cur.Value, b.OnHand, q, cost))
+		v.adjustment = v.after.Value.Sub(cur.Value).Sub(cost)
+	default:
+		v.after = Known(cur.Value.Add(cost))
+	}
+	return v, nil
+}
+
+// settle aplica una entrada de cantidad q y costo total cost a un saldo en
+// déficit (onHand < 0, valor provisional value ≤ 0). Las primeras unidades
+// cubren el déficit: su costo real reemplaza el provisional y la diferencia
+// queda como ajuste de valor; el resto entra a su costo (sección 24.7).
+func settle(value, onHand, q, cost decimal.Decimal) decimal.Decimal {
+	deficit := onHand.Neg()
+	covered := q
+	if deficit.Cmp(q) < 0 {
+		covered = deficit
+	}
+	provisional := value.Neg()
+	if !covered.Equal(deficit) {
+		provisional = share(value.Neg(), covered, deficit)
+	}
+	actual := cost
+	if !covered.Equal(q) {
+		actual = share(cost, covered, q)
+	}
+	return value.Add(provisional).Add(cost.Sub(actual))
+}
+
+func valuateExit(b Balance, cur Amount, q, after decimal.Decimal, c Costing) (valuation, error) {
+	if c.UnitCost.Known {
+		return valuation{}, fmt.Errorf("%w: una salida se valora al costo promedio", ErrInvalid)
+	}
+	if !cur.Known {
+		if c.Fixed.Known {
+			return valuation{}, fmt.Errorf("%w: la existencia del almacén no está valorada; registre antes una entrada con costo unitario", ErrValuation)
+		}
+		if after.IsNegative() {
+			return valuation{}, fmt.Errorf("%w: la existencia no está valorada; no hay costo con qué valorar un déficit", ErrValuation)
+		}
+		v := valuation{}
+		if after.IsZero() {
+			v.after = Known(decimal.Zero())
+		}
+		return v, nil
+	}
+	if c.Fixed.Known {
+		cost := c.Fixed.Value
+		if cost.Sign() > 0 {
+			return valuation{}, fmt.Errorf("%w: el costo fijo debe tener el signo de la cantidad", ErrInvalid)
+		}
+		if after.IsNegative() {
+			return valuation{}, fmt.Errorf("%w: un costo fijo no se aplica a un déficit", ErrValuation)
 		}
 		v := valuation{unitCost: Known(unit(cost.Abs(), q.Abs())), cost: Known(cost)}
 		total := cur.Value.Add(cost)
@@ -161,55 +253,58 @@ func valuate(b Balance, q decimal.Decimal, c Costing) (valuation, error) {
 		}
 		v.after = Known(total)
 		return v, nil
-
-	case in && c.UnitCost.Known:
-		uc := c.UnitCost.Value
-		if uc.IsNegative() {
-			return valuation{}, fmt.Errorf("%w: el costo unitario no puede ser negativo", ErrInvalid)
-		}
-		cost := q.Mul(uc).Round(ValueScale, valueRounding)
-		v := valuation{unitCost: Known(uc), cost: Known(cost)}
-		if !cur.Known {
-			// La primera entrada con costo valora también la existencia previa.
-			v.adjustment = b.OnHand.Mul(uc).Round(ValueScale, valueRounding)
-			v.after = Known(cost.Add(v.adjustment))
-			return v, nil
-		}
-		v.after = Known(cur.Value.Add(cost))
-		return v, nil
-
-	case in:
-		if cpp := b.UnitCost(); cpp.Known {
-			cost := share(cur.Value, q, b.OnHand)
-			return valuation{unitCost: cpp, cost: Known(cost), after: Known(cur.Value.Add(cost))}, nil
-		}
-		if !cur.Known && c.AllowUnknown {
-			return valuation{}, nil
-		}
-		return valuation{}, ErrCostRequired
-
-	default:
-		if c.UnitCost.Known {
-			return valuation{}, fmt.Errorf("%w: una salida se valora al costo promedio", ErrInvalid)
-		}
-		if !cur.Known {
-			v := valuation{}
-			if after.IsZero() {
-				v.after = Known(decimal.Zero())
-			}
-			return v, nil
-		}
+	}
+	if !after.IsNegative() {
 		cost := cur.Value.Neg()
 		if !after.IsZero() {
 			cost = share(cur.Value, q.Abs(), b.OnHand).Neg()
 		}
 		return valuation{unitCost: b.UnitCost(), cost: Known(cost), after: Known(cur.Value.Add(cost))}, nil
 	}
+	// Déficit: lo positivo sale con todo su valor y el resto al último CPP
+	// válido, como costo provisional.
+	if !b.LastUnitCost.Known {
+		return valuation{}, fmt.Errorf("%w: el producto nunca tuvo costo en este almacén; no hay costo provisional para el déficit", ErrValuation)
+	}
+	cost := deficitCost(b.OnHand, cur.Value, q, b.LastUnitCost)
+	return valuation{unitCost: Known(unit(cost.Value.Abs(), q.Abs())), cost: cost, after: Known(cur.Value.Add(cost.Value))}, nil
+}
+
+// deficitCost es el costo de una salida que deja la existencia negativa: el
+// valor de lo positivo más el déficit al último CPP válido.
+func deficitCost(onHand, value, q decimal.Decimal, last Amount) Amount {
+	if !last.Known {
+		return Amount{}
+	}
+	short := onHand.Add(q).Neg()
+	if onHand.IsNegative() {
+		short = q.Abs()
+	}
+	cost := short.Mul(last.Value).Round(ValueScale, valueRounding).Neg()
+	if onHand.Sign() > 0 {
+		cost = cost.Sub(value)
+	}
+	return Known(cost)
+}
+
+// LastValidCost es el CPP de un saldo con existencia positiva valorada; el
+// repositorio lo usa para derivar el último costo válido del kardex.
+func LastValidCost(onHand decimal.Decimal, value Amount) Amount {
+	return lastCost(onHand, value, Amount{})
+}
+
+// lastCost es el CPP tras un movimiento si hay existencia positiva
+// valorada, o el último conocido si no.
+func lastCost(onHand decimal.Decimal, value, prev Amount) Amount {
+	if onHand.Sign() > 0 && value.Known {
+		return Known(unit(value.Value, onHand))
+	}
+	return prev
 }
 
 // replayValue comprueba la valoración de m sobre la existencia y el valor
 // previos y devuelve el valor resultante.
-func replayValue(before decimal.Decimal, value Amount, m Movement) (Amount, error) {
+func replayValue(before decimal.Decimal, value, last Amount, m Movement) (Amount, error) {
 	adj := m.ValueAdjustment
 	if m.Cost.Known != m.UnitCost.Known {
 		return Amount{}, errors.New("costo y costo unitario incompletos")
@@ -224,11 +319,19 @@ func replayValue(before decimal.Decimal, value Amount, m Movement) (Amount, erro
 		return Amount{}, nil
 	}
 	after := m.ValueAfter.Value
-	if after.IsNegative() {
-		return Amount{}, fmt.Errorf("valor negativo %s", after)
-	}
-	if m.OnHandAfter.IsZero() && !after.IsZero() {
-		return Amount{}, fmt.Errorf("existencia cero con valor %s", after)
+	switch m.OnHandAfter.Sign() {
+	case 0:
+		if !after.IsZero() {
+			return Amount{}, fmt.Errorf("existencia cero con valor %s", after)
+		}
+	case 1:
+		if after.IsNegative() {
+			return Amount{}, fmt.Errorf("valor negativo %s con existencia positiva", after)
+		}
+	default:
+		if after.Sign() > 0 {
+			return Amount{}, fmt.Errorf("déficit con valor positivo %s", after)
+		}
 	}
 	prev := normalized(before, value)
 	switch {
@@ -236,7 +339,16 @@ func replayValue(before decimal.Decimal, value Amount, m Movement) (Amount, erro
 		if !m.Cost.Known {
 			return Amount{}, errors.New("movimiento sin costo en un saldo valorado")
 		}
-		if !adj.IsZero() && !m.OnHandAfter.IsZero() {
+		if m.OnHandAfter.IsNegative() && m.Quantity.IsNegative() {
+			if want := deficitCost(before, prev.Value, m.Quantity, last); !want.Equal(m.Cost) {
+				return Amount{}, fmt.Errorf("la salida en déficit debía costar %s y registra %s", want, m.Cost)
+			}
+		}
+		if before.IsNegative() && m.Quantity.Sign() > 0 {
+			if want := settle(prev.Value, before, m.Quantity, m.Cost.Value); !want.Equal(after) {
+				return Amount{}, fmt.Errorf("la liquidación del déficit debía dejar %s y registra %s", want, after)
+			}
+		} else if !adj.IsZero() && !m.OnHandAfter.IsZero() {
 			return Amount{}, fmt.Errorf("ajuste de valor %s sin agotar la existencia", adj)
 		}
 		if want := prev.Value.Add(m.Cost.Value).Add(adj); !want.Equal(after) {

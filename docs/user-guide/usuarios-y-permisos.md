@@ -43,10 +43,11 @@ Plantillas sembradas en cada organización (se pueden editar):
 | Rol | Permisos iniciales |
 |---|---|
 | `ADMIN_ORG` | Todo, salvo los permisos extraordinarios |
-| `ADMIN_EMPRESA` | Ver estructura y catálogo; crear sucursales y almacenes; ver y gestionar usuarios; ver y ajustar existencias |
-| `ENCARGADO` | Ver estructura y catálogo; crear almacenes; ver usuarios; ver y ajustar existencias |
-| `ALMACENISTA` | Ver estructura y catálogo; ver y ajustar existencias |
-| `CAJERO`, `OPERADOR_TECNICO` | Ver estructura, catálogo y existencias (los permisos de venta llegan en M4) |
+| `ADMIN_EMPRESA` | Ver estructura y catálogo; crear sucursales y almacenes; ver y gestionar usuarios; ver, ajustar y transferir existencias; reservas, bloqueos y conteos (también aprobarlos); política de existencia negativa |
+| `ENCARGADO` | Ver estructura y catálogo; crear almacenes; ver usuarios; ver, ajustar y transferir existencias; reservas, bloqueos y conteos (también aprobarlos) |
+| `ALMACENISTA` | Ver estructura y catálogo; ver, ajustar y transferir existencias; reservas, bloqueos y conteos (sin aprobarlos) |
+| `CAJERO` | Ver estructura, catálogo y existencias; reservas (los permisos de venta llegan en M4) |
+| `OPERADOR_TECNICO` | Ver estructura, catálogo y existencias |
 
 ```sh
 balanzapro role list
@@ -56,8 +57,13 @@ balanzapro role edit --code CAJERO --add org.warehouse.create
 ```
 
 Los permisos **extraordinarios** (aprobar ventas bajo costo, restaurar
-respaldos) no vienen en ninguna plantilla: un administrador de la
-organización debe agregarlos expresamente a un rol.
+respaldos, dejar existencia negativa) no vienen en ninguna plantilla: un
+administrador de la organización debe agregarlos expresamente a un rol.
+
+```sh
+balanzapro role create --code NEGATIVOS --name "Excepción de negativos" --permission inventory.negative_stock.override
+balanzapro user assign --username maria --role NEGATIVOS --company principal --branch principal
+```
 
 ## Reglas de seguridad
 

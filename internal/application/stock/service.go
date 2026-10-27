@@ -79,6 +79,45 @@ type Repository interface {
 	Transfers(ctx context.Context, orgID id.ID) ([]inventory.Transfer, error)
 	// TransferMovements devuelve las dos patas: salida y entrada.
 	TransferMovements(ctx context.Context, orgID, transferID id.ID) ([]inventory.Movement, error)
+
+	// UpdateCommitments guarda lo reservado y bloqueado de un saldo sin
+	// avanzar su versión.
+	UpdateCommitments(ctx context.Context, b inventory.Balance) error
+
+	InsertPolicyChange(ctx context.Context, c inventory.PolicyChange) error
+	// CurrentPolicy devuelve la versión vigente de la política de la empresa
+	// (productID cero) o de un producto; apporg.ErrNotFound si nunca se fijó.
+	CurrentPolicy(ctx context.Context, orgID, companyID, productID id.ID) (inventory.PolicyChange, error)
+	ProductPolicies(ctx context.Context, orgID, companyID id.ID) ([]inventory.PolicyChange, error)
+
+	InsertReservation(ctx context.Context, v inventory.Reservation) error
+	// UpdateReservation guarda el avance o cierre de una reserva activa.
+	UpdateReservation(ctx context.Context, v inventory.Reservation) error
+	Reservation(ctx context.Context, orgID, reservationID id.ID) (inventory.Reservation, error)
+	ReservationByKey(ctx context.Context, orgID id.ID, key string) (inventory.Reservation, error)
+	Reservations(ctx context.Context, f HoldFilter) ([]inventory.Reservation, error)
+	// DueReservations son las activas con vencimiento cumplido.
+	DueReservations(ctx context.Context, f HoldFilter, now time.Time) ([]inventory.Reservation, error)
+
+	InsertBlock(ctx context.Context, v inventory.Block) error
+	UpdateBlock(ctx context.Context, v inventory.Block) error
+	Block(ctx context.Context, orgID, blockID id.ID) (inventory.Block, error)
+	BlockByKey(ctx context.Context, orgID id.ID, key string) (inventory.Block, error)
+	Blocks(ctx context.Context, f HoldFilter) ([]inventory.Block, error)
+
+	InsertCount(ctx context.Context, c inventory.Count) error
+	// UpdateCount cambia el estado solo si sigue en previous.
+	UpdateCount(ctx context.Context, c inventory.Count, previous inventory.CountStatus) error
+	Count(ctx context.Context, orgID, countID id.ID) (inventory.Count, error)
+	Counts(ctx context.Context, orgID, warehouseID id.ID, status inventory.CountStatus) ([]inventory.Count, error)
+	SaveCountLine(ctx context.Context, orgID id.ID, l inventory.CountLine) error
+	CountLines(ctx context.Context, orgID, countID id.ID) ([]inventory.CountLine, error)
+}
+
+// HoldFilter filtra reservas y bloqueos por los campos no nulos.
+type HoldFilter struct {
+	OrganizationID, WarehouseID, ProductID id.ID
+	Status                                 inventory.HoldStatus
 }
 
 type Store interface {
@@ -205,6 +244,10 @@ type AdjustInput struct {
 	UnitCost       string
 	Reason, Note   string
 	IdempotencyKey string
+	// AllowNegative pide una salida en déficit: exige el permiso
+	// extraordinario inventory.negative_stock.override y que la política de
+	// la empresa y el producto lo permitan, dentro de su límite.
+	AllowNegative bool
 }
 
 // MaxKeyLength limita la clave de idempotencia.
@@ -272,7 +315,8 @@ func (s *Service) Adjust(ctx context.Context, p identity.Principal, in AdjustInp
 		if in.Direction == inventory.Out {
 			qty = qty.Neg()
 		}
-		hash := digest("adjust", loc.Warehouse.ID.String(), prod.ID.String(), qty.StringFixed(unit.Scale), string(reason), note, costing.UnitCost.String())
+		hash := digest("adjust", loc.Warehouse.ID.String(), prod.ID.String(), qty.StringFixed(unit.Scale), string(reason), note, costing.UnitCost.String(),
+			fmt.Sprint(in.AllowNegative))
 		if prior, done, err := replayed(ctx, r, p.OrganizationID, key, hash); err != nil || done {
 			if done {
 				out, err = s.view(ctx, r, prior)
@@ -290,12 +334,35 @@ func (s *Service) Adjust(ctx context.Context, p identity.Principal, in AdjustInp
 		if in.Direction == inventory.Out {
 			kind = inventory.KindAdjustmentOut
 		}
-		m := inventory.Movement{Kind: kind, Reason: reason, Quantity: qty, Note: note, IdempotencyKey: key, RequestHash: hash}
-		m, err = s.apply(ctx, r, p, loc, prod.ID, m, costing)
+		var policyChange id.ID
+		if in.AllowNegative {
+			if in.Direction != inventory.Out {
+				return fmt.Errorf("%w: solo una salida puede dejar existencia negativa", inventory.ErrInvalid)
+			}
+			if err := p.Authorize(identity.PermNegativeOverride, loc.Warehouse.Scope(), "el almacén "+loc.String()); err != nil {
+				return err
+			}
+			limit, change, err := negativeLimit(ctx, r, loc.Company, prod)
+			if err != nil {
+				return err
+			}
+			costing.Overdraft, policyChange = inventory.Known(limit), change
+		}
+		l, err := s.lock(ctx, r, p.OrganizationID, loc, prod.ID)
 		if err != nil {
 			return err
 		}
-		out = MovementView{Movement: m, Product: prod, Unit: unit, Location: loc}
+		st, err := s.stage(p, l, inventory.Movement{Kind: kind, Reason: reason, Quantity: qty, Note: note, IdempotencyKey: key, RequestHash: hash}, costing)
+		if err != nil {
+			return err
+		}
+		if st.m.OnHandAfter.IsNegative() {
+			st.m.PolicyChangeID = policyChange
+		}
+		if err := st.commit(ctx, r); err != nil {
+			return err
+		}
+		out = MovementView{Movement: st.m, Product: prod, Unit: unit, Location: loc}
 		return nil
 	})
 	return out, err
@@ -321,7 +388,7 @@ func replayed(ctx context.Context, r Repository, orgID id.ID, key, hash string) 
 
 // apply lee el saldo, aplica el movimiento y guarda ambos.
 func (s *Service) apply(ctx context.Context, r Repository, p identity.Principal, loc Location, productID id.ID, m inventory.Movement, c inventory.Costing) (inventory.Movement, error) {
-	l, err := lockBalance(ctx, r, p.OrganizationID, loc, productID)
+	l, err := s.lock(ctx, r, p.OrganizationID, loc, productID)
 	if err != nil {
 		return inventory.Movement{}, err
 	}
@@ -334,12 +401,21 @@ type locked struct {
 	isNew bool
 }
 
-func lockBalance(ctx context.Context, r Repository, orgID id.ID, loc Location, productID id.ID) (locked, error) {
+// lock lee el saldo con bloqueo y, antes de usarlo, libera las reservas
+// vencidas que lo comprometían.
+func (s *Service) lock(ctx context.Context, r Repository, orgID id.ID, loc Location, productID id.ID) (locked, error) {
 	b, err := r.BalanceForUpdate(ctx, orgID, loc.Warehouse.ID, productID)
 	if errors.Is(err, apporg.ErrNotFound) {
 		return locked{Balance: inventory.Balance{Key: inventory.Key{Scope: loc.Warehouse.Scope(), ProductID: productID}}, isNew: true}, nil
 	}
-	return locked{Balance: b}, err
+	if err != nil {
+		return locked{}, err
+	}
+	l := locked{Balance: b}
+	if _, err := s.expireLocked(ctx, r, &l); err != nil {
+		return locked{}, err
+	}
+	return l, nil
 }
 
 // post aplica m sobre un saldo ya bloqueado y guarda saldo y movimiento.
@@ -545,11 +621,11 @@ func (s *Service) Transfer(ctx context.Context, p identity.Principal, in Transfe
 		if to.Warehouse.ID.String() < from.Warehouse.ID.String() {
 			first, second = to, from
 		}
-		l1, err := lockBalance(ctx, r, p.OrganizationID, first, prod.ID)
+		l1, err := s.lock(ctx, r, p.OrganizationID, first, prod.ID)
 		if err != nil {
 			return err
 		}
-		l2, err := lockBalance(ctx, r, p.OrganizationID, second, prod.ID)
+		l2, err := s.lock(ctx, r, p.OrganizationID, second, prod.ID)
 		if err != nil {
 			return err
 		}
@@ -675,6 +751,8 @@ func (s *Service) balanceView(ctx context.Context, r Repository, b inventory.Bal
 type StockFilter struct {
 	Where   *WarehouseRef
 	Product string
+	// Negative deja solo los saldos en déficit.
+	Negative bool
 }
 
 // Stock devuelve los saldos de los almacenes donde el principal puede ver
@@ -684,7 +762,8 @@ func (s *Service) Stock(ctx context.Context, p identity.Principal, f StockFilter
 		return nil, fmt.Errorf("%w: se requiere %s", identity.ErrDenied, identity.PermStockRead)
 	}
 	var out []BalanceView
-	err := s.store.InTx(ctx, func(r Repository) error {
+	err := s.write(ctx, func(r Repository) error {
+		out = nil
 		var warehouseID, productID id.ID
 		if f.Where != nil {
 			loc, err := locate(ctx, r, p, *f.Where, identity.PermStockRead)
@@ -700,12 +779,15 @@ func (s *Service) Stock(ctx context.Context, p identity.Principal, f StockFilter
 			}
 			productID = prod.ID
 		}
+		if _, err := s.expire(ctx, r, HoldFilter{OrganizationID: p.OrganizationID, WarehouseID: warehouseID, ProductID: productID}); err != nil {
+			return err
+		}
 		list, err := r.Balances(ctx, p.OrganizationID, warehouseID, productID)
 		if err != nil {
 			return err
 		}
 		for _, b := range list {
-			if !p.Can(identity.PermStockRead, b.Scope) {
+			if !p.Can(identity.PermStockRead, b.Scope) || f.Negative && !b.OnHand.IsNegative() {
 				continue
 			}
 			v, err := s.balanceView(ctx, r, b)
@@ -729,13 +811,16 @@ func (s *Service) Kardex(ctx context.Context, p identity.Principal, where Wareho
 	}
 	var bv BalanceView
 	var list []inventory.Movement
-	err := s.store.InTx(ctx, func(r Repository) error {
+	err := s.write(ctx, func(r Repository) error {
 		loc, err := locate(ctx, r, p, where, identity.PermStockRead)
 		if err != nil {
 			return err
 		}
 		prod, err := appcatalog.Resolve(ctx, r, p.OrganizationID, product)
 		if err != nil {
+			return err
+		}
+		if _, err := s.expire(ctx, r, HoldFilter{OrganizationID: p.OrganizationID, WarehouseID: loc.Warehouse.ID, ProductID: prod.ID}); err != nil {
 			return err
 		}
 		b, err := r.Balance(ctx, p.OrganizationID, loc.Warehouse.ID, prod.ID)
@@ -775,6 +860,10 @@ type Report struct {
 	// de BP-M2-002): no es un error, pero no tienen CPP hasta que una
 	// entrada con costo los valore.
 	Unvalued []BalanceView
+	// Deficits son saldos con existencia negativa autorizada, pendientes de
+	// regularizar; AtRisk, saldos cuyo reservado y bloqueado ya no tiene
+	// respaldo físico (p. ej. tras un conteo). Ambos son avisos.
+	Deficits, AtRisk []BalanceView
 }
 
 // OK indica que no hay diferencias; los saldos sin valorar son un aviso.
@@ -795,6 +884,10 @@ func (s *Service) Verify(ctx context.Context, p identity.Principal) (Report, err
 			return err
 		}
 		legs := map[id.ID][]inventory.Movement{}
+		committed, err := commitments(ctx, r, p.OrganizationID)
+		if err != nil {
+			return err
+		}
 		for _, b := range list {
 			movements, err := r.Movements(ctx, p.OrganizationID, b.Scope.Warehouse(), b.ProductID, 0, 0)
 			if err != nil {
@@ -808,17 +901,29 @@ func (s *Service) Verify(ctx context.Context, p identity.Principal) (Report, err
 				}
 			}
 			replayErr := inventory.Replay(b, movements)
-			if replayErr == nil && (b.Value.Known || b.OnHand.IsZero()) {
+			if replayErr == nil {
+				replayErr = committed[b.Key].check(b)
+			}
+			unvalued := !b.Value.Known && !b.OnHand.IsZero()
+			if replayErr == nil && !unvalued && !b.OnHand.IsNegative() && !b.AtRisk() {
 				continue
 			}
 			v, err := s.balanceView(ctx, r, b)
 			if err != nil {
 				return err
 			}
-			if replayErr != nil {
+			switch {
+			case replayErr != nil:
 				rep.Problems = append(rep.Problems, Problem{BalanceView: v, Detail: replayErr.Error()})
-			} else {
+				continue
+			case unvalued:
 				rep.Unvalued = append(rep.Unvalued, v)
+			}
+			if b.OnHand.IsNegative() {
+				rep.Deficits = append(rep.Deficits, v)
+			}
+			if b.AtRisk() {
+				rep.AtRisk = append(rep.AtRisk, v)
 			}
 		}
 		transfers, err := r.Transfers(ctx, p.OrganizationID)
@@ -838,6 +943,41 @@ func (s *Service) Verify(ctx context.Context, p identity.Principal) (Report, err
 		return nil
 	})
 	return rep, err
+}
+
+// committed suma lo pendiente de las reservas y bloqueos activos de un saldo.
+type committed struct{ reserved, blocked decimal.Decimal }
+
+func (c committed) check(b inventory.Balance) error {
+	if !c.reserved.Equal(b.Reserved) || !c.blocked.Equal(b.Blocked) {
+		return fmt.Errorf("el saldo registra %s reservado y %s bloqueado, pero las reservas activas suman %s y los bloqueos %s",
+			b.Reserved, b.Blocked, c.reserved, c.blocked)
+	}
+	return nil
+}
+
+func commitments(ctx context.Context, r Repository, orgID id.ID) (map[inventory.Key]committed, error) {
+	out := map[inventory.Key]committed{}
+	active := HoldFilter{OrganizationID: orgID, Status: inventory.HoldActive}
+	reservations, err := r.Reservations(ctx, active)
+	if err != nil {
+		return nil, err
+	}
+	for _, v := range reservations {
+		c := out[v.Key]
+		c.reserved = c.reserved.Add(v.Remaining())
+		out[v.Key] = c
+	}
+	blocks, err := r.Blocks(ctx, active)
+	if err != nil {
+		return nil, err
+	}
+	for _, v := range blocks {
+		c := out[v.Key]
+		c.blocked = c.blocked.Add(v.Quantity)
+		out[v.Key] = c
+	}
+	return out, nil
 }
 
 // checkTransfer exige una salida del origen y una entrada al destino por la

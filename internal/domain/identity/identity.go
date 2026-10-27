@@ -94,9 +94,15 @@ const (
 	PermStockRead       Permission = "inventory.stock.read"
 	PermStockAdjust     Permission = "inventory.stock.adjust"
 	PermTransferCreate  Permission = "inventory.transfer.create"
+	PermReservation     Permission = "inventory.reservation.manage"
+	PermBlock           Permission = "inventory.block.manage"
+	PermCountManage     Permission = "inventory.count.manage"
+	PermCountApprove    Permission = "inventory.count.approve"
+	PermPolicyManage    Permission = "inventory.policy.manage"
 	// Extraordinarios: nunca forman parte de una plantilla (sección 26.3).
 	PermApproveBelowCost Permission = "pricing.override.approve_below_cost"
 	PermBackupRestore    Permission = "system.backup.restore"
+	PermNegativeOverride Permission = "inventory.negative_stock.override"
 )
 
 // PermissionInfo describe una entrada del catálogo.
@@ -120,8 +126,14 @@ var catalog = []PermissionInfo{
 	{PermStockRead, "Ver existencias y kardex de los almacenes del ámbito", false},
 	{PermStockAdjust, "Registrar entradas, salidas y reversos de ajuste en los almacenes del ámbito", false},
 	{PermTransferCreate, "Transferir existencia entre almacenes de una sucursal (en ambos almacenes)", false},
+	{PermReservation, "Crear, despachar y liberar reservas de existencia", false},
+	{PermBlock, "Bloquear y liberar mercancía no vendible (daño, cuarentena…)", false},
+	{PermCountManage, "Crear conteos físicos, capturar lo contado y enviarlos a revisión", false},
+	{PermCountApprove, "Aprobar o rechazar conteos de otros usuarios; aplica el ajuste", false},
+	{PermPolicyManage, "Configurar la política de existencia negativa de la empresa y sus productos", false},
 	{PermApproveBelowCost, "Aprobar ventas por debajo del costo (DEC-007.B2, nivel N2; uso en M4)", true},
 	{PermBackupRestore, "Restaurar respaldos (uso en M5)", true},
+	{PermNegativeOverride, "Registrar salidas que dejan existencia negativa, dentro de la política y su límite (DEC-007.F2)", true},
 }
 
 // Catalog devuelve todos los permisos conocidos, en orden estable.
@@ -230,10 +242,13 @@ func Templates() []RoleTemplate {
 	}
 	return []RoleTemplate{
 		{AdminRoleCode, "Administrador de organización", admin},
-		{"ADMIN_EMPRESA", "Administrador de empresa", []Permission{PermOrgRead, PermBranchCreate, PermWarehouseCreate, PermUserRead, PermUserManage, PermProductRead, PermStockRead, PermStockAdjust, PermTransferCreate}},
-		{"ENCARGADO", "Encargado", []Permission{PermOrgRead, PermWarehouseCreate, PermUserRead, PermProductRead, PermStockRead, PermStockAdjust, PermTransferCreate}},
-		{"CAJERO", "Cajero", []Permission{PermOrgRead, PermProductRead, PermStockRead}},
-		{"ALMACENISTA", "Almacenista", []Permission{PermOrgRead, PermProductRead, PermStockRead, PermStockAdjust, PermTransferCreate}},
+		{"ADMIN_EMPRESA", "Administrador de empresa", []Permission{PermOrgRead, PermBranchCreate, PermWarehouseCreate, PermUserRead, PermUserManage, PermProductRead, PermStockRead, PermStockAdjust, PermTransferCreate,
+			PermReservation, PermBlock, PermCountManage, PermCountApprove, PermPolicyManage}},
+		{"ENCARGADO", "Encargado", []Permission{PermOrgRead, PermWarehouseCreate, PermUserRead, PermProductRead, PermStockRead, PermStockAdjust, PermTransferCreate,
+			PermReservation, PermBlock, PermCountManage, PermCountApprove}},
+		{"CAJERO", "Cajero", []Permission{PermOrgRead, PermProductRead, PermStockRead, PermReservation}},
+		{"ALMACENISTA", "Almacenista", []Permission{PermOrgRead, PermProductRead, PermStockRead, PermStockAdjust, PermTransferCreate,
+			PermReservation, PermBlock, PermCountManage}},
 		{"OPERADOR_TECNICO", "Operador técnico", []Permission{PermOrgRead, PermProductRead, PermStockRead}},
 	}
 }

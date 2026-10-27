@@ -53,6 +53,27 @@ printf '%s\n' "sol y luna 2026" | "$bin" user create --username cajero --name "C
 "$bin" inventory stock --product HAR-1
 "$bin" inventory kardex --warehouse deposito --product HAR-1
 "$bin" inventory verify
+# Reservas, bloqueos, conteo y política de existencia negativa (BP-M2-003).
+res=$("$bin" inventory reservation create --warehouse principal --product HAR-1 --qty 5 --reference PED-1 --key res-1 --json)
+res_id=$(printf '%s' "$res" | sed -n 's/.*"id": "\([^"]*\)".*/\1/p' | head -n1)
+"$bin" inventory reservation consume "$res_id" --qty 2
+"$bin" inventory reservation release "$res_id"
+"$bin" inventory reservation expire
+"$bin" inventory block create --warehouse principal --product HAR-1 --qty 1 --reason damage --json
+"$bin" inventory block list
+count=$("$bin" inventory count create --warehouse deposito --json)
+count_id=$(printf '%s' "$count" | sed -n 's/.*"id": "\([^"]*\)".*/\1/p' | head -n1)
+"$bin" inventory count record "$count_id" --product HAR-1 --qty 9
+"$bin" inventory count submit "$count_id"
+# Quien contó no aprueba (código 2).
+set +e; "$bin" inventory count approve "$count_id" >/dev/null 2>&1; code=$?; set -e
+test "$code" -eq 2
+"$bin" inventory policy set --negative on --limit 5
+"$bin" inventory policy show --json
+# Sin el permiso extraordinario, la salida en negativo se deniega (código 8).
+set +e; "$bin" inventory out --warehouse principal --product HAR-1 --qty 100 --reason correction --allow-negative >/dev/null 2>&1; code=$?; set -e
+test "$code" -eq 8
+"$bin" inventory verify
 # Un segundo setup debe rechazarse con el código 6 (conflicto).
 set +e; printf '%s\n' "$pw" | "$bin" setup --name Otra --password-stdin >/dev/null 2>&1; code=$?; set -e
 test "$code" -eq 6

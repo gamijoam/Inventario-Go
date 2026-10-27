@@ -98,11 +98,14 @@ func toMovementJSON(m inventory.Movement, scale int32) movementJSON {
 }
 
 var kindText = map[inventory.Kind]string{
-	inventory.KindAdjustmentIn:  "entrada",
-	inventory.KindAdjustmentOut: "salida",
-	inventory.KindReversal:      "reverso",
-	inventory.KindTransferOut:   "transf. salida",
-	inventory.KindTransferIn:    "transf. entrada",
+	inventory.KindAdjustmentIn:   "entrada",
+	inventory.KindAdjustmentOut:  "salida",
+	inventory.KindReversal:       "reverso",
+	inventory.KindTransferOut:    "transf. salida",
+	inventory.KindTransferIn:     "transf. entrada",
+	inventory.KindReservationOut: "despacho",
+	inventory.KindCountIn:        "conteo +",
+	inventory.KindCountOut:       "conteo −",
 }
 
 // whereFlags agrega --company, --branch y --warehouse. Sin --company ni
@@ -142,7 +145,12 @@ func newInventoryCmd(env Env, flags *globalFlags) *cobra.Command {
 				"duplica el movimiento. Un error se corrige con 'inventory reverse'.\n\n" +
 				"Valoración: una entrada lleva --unit-cost en la moneda de la empresa; sin él\n" +
 				"entra al costo promedio vigente, que debe existir. Una salida se valora\n" +
-				"siempre al costo promedio del almacén.",
+				"siempre al costo promedio del almacén.\n\n" +
+				"Existencia negativa: con --allow-negative, una salida puede dejar déficit si la\n" +
+				"política de la empresa y del producto lo permite (vea 'inventory policy'), dentro\n" +
+				"de su límite y sin tocar unidades reservadas o bloqueadas; exige el permiso\n" +
+				"extraordinario inventory.negative_stock.override. El déficit se valora al último\n" +
+				"costo promedio válido y la entrada siguiente lo liquida a su costo real.",
 			Args: noArgs,
 			RunE: func(cmd *cobra.Command, _ []string) error {
 				return withSession(cmd, env, flags, func(ctx context.Context, s appSession) error {
@@ -164,6 +172,8 @@ func newInventoryCmd(env Env, flags *globalFlags) *cobra.Command {
 		c.Flags().StringVar(&in.IdempotencyKey, "key", "", "clave de idempotencia para reintentos seguros")
 		if d == inventory.In {
 			c.Flags().StringVar(&in.UnitCost, "unit-cost", "", "costo unitario en la moneda de valoración (por defecto, el costo promedio vigente)")
+		} else {
+			c.Flags().BoolVar(&in.AllowNegative, "allow-negative", false, "permite dejar existencia negativa según la política (permiso extraordinario)")
 		}
 		markRequired(c, "product", "qty", "reason")
 		cmd.AddCommand(c)
@@ -194,6 +204,7 @@ func newInventoryCmd(env Env, flags *globalFlags) *cobra.Command {
 
 	var where stock.WarehouseRef
 	var product string
+	var negative bool
 	stockCmd := &cobra.Command{
 		Use:   "stock",
 		Short: "Muestra existencias, valor y costo promedio por almacén",
@@ -203,7 +214,7 @@ func newInventoryCmd(env Env, flags *globalFlags) *cobra.Command {
 		Args: noArgs,
 		RunE: func(cmd *cobra.Command, _ []string) error {
 			return withSession(cmd, env, flags, func(ctx context.Context, s appSession) error {
-				f := stock.StockFilter{Product: product}
+				f := stock.StockFilter{Product: product, Negative: negative}
 				if where != (stock.WarehouseRef{}) {
 					w := withDefaults(where, s)
 					f.Where = &w
@@ -232,6 +243,7 @@ func newInventoryCmd(env Env, flags *globalFlags) *cobra.Command {
 	}
 	whereFlags(stockCmd, &where)
 	stockCmd.Flags().StringVar(&product, "product", "", "SKU, código de barras o ID")
+	stockCmd.Flags().BoolVar(&negative, "negative", false, "solo los saldos con existencia negativa")
 	cmd.AddCommand(stockCmd)
 
 	var kWhere stock.WarehouseRef
@@ -309,10 +321,14 @@ func newInventoryCmd(env Env, flags *globalFlags) *cobra.Command {
 				for _, p := range rep.TransferProblems {
 					tproblems = append(tproblems, transferProblem{p.TransferID.String(), p.Detail})
 				}
-				unvalued := make([]balanceJSON, 0, len(rep.Unvalued))
-				for _, b := range rep.Unvalued {
-					unvalued = append(unvalued, toBalanceJSON(b))
+				notices := func(list []stock.BalanceView) []balanceJSON {
+					out := make([]balanceJSON, 0, len(list))
+					for _, b := range list {
+						out = append(out, toBalanceJSON(b))
+					}
+					return out
 				}
+				unvalued, deficits, atRisk := notices(rep.Unvalued), notices(rep.Deficits), notices(rep.AtRisk)
 				if flags.json {
 					if err := writeJSON(cmd.OutOrStdout(), struct {
 						Schema           string            `json:"schema"`
@@ -322,7 +338,9 @@ func newInventoryCmd(env Env, flags *globalFlags) *cobra.Command {
 						Problems         []problem         `json:"problems"`
 						TransferProblems []transferProblem `json:"transfer_problems"`
 						Unvalued         []balanceJSON     `json:"unvalued"`
-					}{"balanzapro.inventory-verify/v1", rep.Balances, rep.Movements, rep.Transfers, problems, tproblems, unvalued}); err != nil {
+						Deficits         []balanceJSON     `json:"deficits"`
+						AtRisk           []balanceJSON     `json:"at_risk"`
+					}{"balanzapro.inventory-verify/v1", rep.Balances, rep.Movements, rep.Transfers, problems, tproblems, unvalued, deficits, atRisk}); err != nil {
 						return err
 					}
 				} else {
@@ -336,6 +354,12 @@ func newInventoryCmd(env Env, flags *globalFlags) *cobra.Command {
 					for _, b := range unvalued {
 						fmt.Fprintf(out, "[AVISO] %s/%s/%s %s: %s %s sin valorar; registre una entrada con --unit-cost\n", b.Company, b.Branch, b.Warehouse, b.SKU, b.OnHand, b.Unit)
 					}
+					for _, b := range deficits {
+						fmt.Fprintf(out, "[AVISO] %s/%s/%s %s: existencia negativa %s %s pendiente de regularizar\n", b.Company, b.Branch, b.Warehouse, b.SKU, b.OnHand, b.Unit)
+					}
+					for _, b := range atRisk {
+						fmt.Fprintf(out, "[AVISO] %s/%s/%s %s: reservado %s y bloqueado %s sin respaldo físico (existencia %s)\n", b.Company, b.Branch, b.Warehouse, b.SKU, b.Reserved, b.Blocked, b.OnHand)
+					}
 					fmt.Fprintf(out, "%d saldos, %d movimientos y %d transferencias verificados, %d con diferencias, %d sin valorar\n",
 						rep.Balances, rep.Movements, rep.Transfers, len(problems)+len(tproblems), len(unvalued))
 				}
@@ -347,7 +371,7 @@ func newInventoryCmd(env Env, flags *globalFlags) *cobra.Command {
 		},
 	})
 
-	cmd.AddCommand(newTransferCmd(env, flags))
+	cmd.AddCommand(newTransferCmd(env, flags), newPolicyCmd(env, flags), newReservationCmd(env, flags), newBlockCmd(env, flags), newCountCmd(env, flags))
 
 	cmd.AddCommand(&cobra.Command{
 		Use:   "reasons",

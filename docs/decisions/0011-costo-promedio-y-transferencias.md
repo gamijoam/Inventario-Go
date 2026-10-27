@@ -111,8 +111,8 @@ exacto del saldo y no redondear el CPP a 2 decimales.
   costo de la entrada o ajustes de valor.
 - La venta (M4) tomará el costo de la salida como snapshot del costo de
   ventas.
-- La política de existencia negativa (BP-M2-003) deberá definir el costo
-  provisional de las salidas en déficit (24.7). Hoy no hay negativos y
-  ninguna salida se valora con existencia cero.
+- La política de existencia negativa (BP-M2-003, ADR-0012) valora las
+  salidas en déficit al último CPP válido y liquida la diferencia en la
+  entrada siguiente.
 - Transferencias entre sucursales: flujo propio con despacho, tránsito y
   recepción (DEC-006), fuera de este ADR.
