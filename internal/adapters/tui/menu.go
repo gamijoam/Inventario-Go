@@ -9,6 +9,7 @@ import (
 
 	"github.com/gamijoam/inventario-go/internal/application/admin"
 	"github.com/gamijoam/inventario-go/internal/domain/identity"
+	"github.com/gamijoam/inventario-go/internal/domain/inventory"
 )
 
 // ---------- Menú principal ----------
@@ -17,6 +18,7 @@ type menuItem struct {
 	label string
 	info  string              // texto del panel de ayuda
 	perm  identity.Permission // vacío: siempre visible; "session": con sesión
+	alt   identity.Permission // otro permiso que también la muestra
 	open  func(*app) screen
 	run   func(*app) tea.Cmd
 }
@@ -37,6 +39,22 @@ var menuTabs = []menuTab{
 			info: "Unidades con sus decimales (UND, KG, LT…). F2 crea una nueva."},
 		{label: "Existencias y kardex", perm: identity.PermStockRead, open: func(a *app) screen { return newStock(a, "") },
 			info: "Física, reservada, bloqueada y disponible por almacén, con costo promedio y valor. Enter abre el kardex."},
+	}},
+	{"Movimientos", []menuItem{
+		{label: "Entrada de mercancía", perm: identity.PermStockAdjust, open: func(a *app) screen { return newAdjust(a, inventory.In) },
+			info: "Carga inicial, corrección u otra entrada manual, con costo unitario. Las compras a proveedores van por Compras."},
+		{label: "Salida de mercancía", perm: identity.PermStockAdjust, open: func(a *app) screen { return newAdjust(a, inventory.Out) },
+			info: "Merma, consumo interno, corrección u otra salida manual, al costo promedio. Para revertir un movimiento, ábralo en el kardex (F8)."},
+		{label: "Transferencia entre almacenes", perm: identity.PermTransferCreate, open: newTransfer,
+			info: "Mueve existencia entre dos almacenes de la sucursal, al costo promedio del origen."},
+		{label: "Reservas", perm: identity.PermReservation, alt: identity.PermStockRead, open: newReservations,
+			info: "Apartar existencia para un pedido, despacharla o liberarla."},
+		{label: "Bloqueos", perm: identity.PermBlock, alt: identity.PermStockRead, open: newBlocks,
+			info: "Retener mercancía no vendible; liberarla o darla de baja como merma."},
+		{label: "Conteos físicos", perm: identity.PermCountManage, alt: identity.PermCountApprove, open: newCounts,
+			info: "Capturar un conteo con lector o teclado, enviarlo a revisión y aprobarlo o rechazarlo."},
+		{label: "Política de existencia negativa", perm: identity.PermPolicyManage, open: newPolicy,
+			info: "Si una salida puede dejar el disponible en negativo, con qué límite y para qué productos."},
 	}},
 	{"Precios", []menuItem{
 		{label: "Precios vigentes", perm: identity.PermPriceRead, open: newPrices,
@@ -69,7 +87,7 @@ func newMenu(a *app) screen {
 			case a.session == nil:
 				continue
 			case it.perm == "session":
-			case !a.session.Can(it.perm):
+			case !a.session.Can(it.perm) && (it.alt == "" || !a.session.Can(it.alt)):
 				continue
 			}
 			items = append(items, it)

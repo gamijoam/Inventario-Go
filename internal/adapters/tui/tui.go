@@ -92,6 +92,11 @@ type (
 		login bool // viene del formulario, no de retomar la sesión guardada
 	}
 	loggedOutMsg struct{ err error }
+	// replaceMsg cierra la pantalla actual y abre s en su lugar.
+	replaceMsg struct {
+		s      screen
+		status string
+	}
 	// loaded entrega un resultado asíncrono a la pantalla to.
 	loaded struct {
 		to  int
@@ -101,6 +106,10 @@ type (
 )
 
 func push(s screen) tea.Cmd { return func() tea.Msg { return pushMsg{s} } }
+
+func replace(s screen, status string) tea.Cmd {
+	return func() tea.Msg { return replaceMsg{s, status} }
+}
 
 // back vuelve a la pantalla anterior, que se recarga si sabe hacerlo.
 func back(status string) tea.Cmd { return func() tea.Msg { return popMsg{status} } }
@@ -219,6 +228,12 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		return m, m.reset(newLogin(m.app))
 	case pushMsg:
 		m.status, m.statusErr = "", false
+		return m, m.open(msg.s)
+	case replaceMsg:
+		if len(m.stack) > 1 {
+			m.stack, m.ids = m.stack[:len(m.stack)-1], m.ids[:len(m.ids)-1]
+		}
+		m.status, m.statusErr = msg.status, false
 		return m, m.open(msg.s)
 	case popMsg:
 		if len(m.stack) > 1 {

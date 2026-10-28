@@ -5,7 +5,7 @@ pantalla interactiva. Se maneja solo con el teclado, al estilo de la
 configuración de una BIOS:
 
 ```
- BalanzaPro   Inventario  Precios  Sistema               admin · PRINCIPAL/PRINCIPAL
+ BalanzaPro   Inventario  Movimientos  Precios  Sistema  admin · PRINCIPAL/PRINCIPAL
 ─────────────────────────────────────────────────────────────────────────────────────
  Inventario                                                  │ Ayuda
                                                              │
@@ -66,7 +66,14 @@ comandos: cerrar sesión en uno la cierra en el otro.
 |---|---|---|---|
 | Inventario | Productos | Catálogo: alta, edición, códigos de barras, inactivar; existencias y precios del producto | ver catálogo |
 | | Unidades de medida | Unidades y sus decimales; alta de unidades | ver catálogo |
-| | Existencias y kardex | Física, reservada, bloqueada y disponible por almacén, con costo promedio y valor; **Enter** abre el kardex | ver existencias |
+| | Existencias y kardex | Física, reservada, bloqueada y disponible por almacén, con costo promedio y valor; **Enter** abre el kardex y **F8** revierte un movimiento | ver existencias |
+| Movimientos | Entrada de mercancía | Carga inicial, corrección u otra entrada, con costo unitario | ajustar existencias |
+| | Salida de mercancía | Merma, consumo interno, corrección u otra salida | ajustar existencias |
+| | Transferencia entre almacenes | De un almacén a otro de la sucursal | transferir |
+| | Reservas | Apartar existencia para un pedido; despachar o liberar | ver existencias (gestionar: reservas) |
+| | Bloqueos | Retener mercancía no vendible; liberar o dar de baja | ver existencias (gestionar: bloqueos) |
+| | Conteos físicos | Captura rápida, revisión y aprobación | contar o aprobar conteos |
+| | Política de existencia negativa | Si una salida puede dejar el disponible en negativo | gestionar la política |
 | Precios | Precios vigentes | Precio por lista, el programado y la propuesta pendiente | ver precios |
 | | Propuestas de precio | Pendientes (**T** muestra todas); aprobar o rechazar | ver precios |
 | Sistema | Diagnóstico | Las verificaciones de `balanzapro doctor`; **R** repite | — |
@@ -91,6 +98,7 @@ Todos funcionan igual:
 |---|---|
 | ↑/↓ o Tab | Campo anterior o siguiente |
 | ←/→ o Espacio | Cambia la opción de un campo `‹ … ›` |
+| F5 | En un campo **Producto**, abre la lista de productos |
 | Enter | Pasa al siguiente campo; en el último, guarda |
 | F10 (o Ctrl+S) | Guarda desde cualquier campo |
 | Esc | Cancela sin guardar |
@@ -98,6 +106,25 @@ Todos funcionan igual:
 Si el sistema rechaza los datos (un SKU repetido, un código de barras con
 dígito verificador incorrecto…), el formulario sigue abierto con el motivo
 en rojo: corrija y vuelva a guardar.
+
+### El campo Producto
+
+Acepta el SKU, parte del nombre o el código de barras; un **lector de
+códigos** funciona igual que el teclado. Al salir del campo, la TUI lo
+reconoce y muestra debajo el producto, su unidad y lo disponible en los
+almacenes de la sucursal (`→ HARINA Harina PAN 1 kg (UND) · disponible
+PRINCIPAL 20`). Si no lo reconoce o coinciden varios, **F5** abre la lista:
+escriba para filtrar y **Enter** lo elige.
+
+### El campo Almacén
+
+Muestra los almacenes activos de su sucursal; empieza en el primero y se
+cambia con **←/→**.
+
+### Guardar dos veces no duplica
+
+Cada formulario de movimiento lleva su propia clave: si guarda, falla la
+conexión y vuelve a guardar, la operación se registra una sola vez.
 
 ## Catálogo
 
@@ -117,6 +144,71 @@ En **Unidades de medida**, con permiso para gestionarlas, **F2 Nueva** pide
 código (`SACO`, `CAJA12`), nombre y decimales (0 para unidades enteras, 3
 para kilos con gramos). Vea [Catálogo](catalogo.md).
 
+## Movimientos de inventario
+
+### Entradas y salidas
+
+**Movimientos → Entrada de mercancía** pide almacén, producto, cantidad,
+costo unitario (vacío entra al costo promedio vigente, que debe existir),
+motivo y nota. **Salida de mercancía** es igual, sin costo: sale al costo
+promedio. El motivo **Otro** exige una nota. Las compras a proveedores no
+van aquí, sino por Compras.
+
+Una salida no deja el disponible en negativo. Si la política de la empresa
+lo permite y usted tiene el permiso extraordinario, el formulario muestra
+**Permitir negativo** (ver [Inventario](inventario.md)).
+
+### Revertir un movimiento
+
+En el kardex, elija el movimiento y pulse **F8**: pide el motivo y registra
+el movimiento contrario; el original queda a la vista. Cada movimiento se
+revierte una sola vez, y una transferencia no se revierte por partes:
+registre otra en sentido contrario.
+
+### Transferencias
+
+**Transferencia entre almacenes**: origen, destino (empieza en otro
+almacén), producto y cantidad. La mercancía sale al costo promedio del
+origen y entra con ese mismo valor, en una sola operación.
+
+### Reservas
+
+Lista las reservas activas (**T** alterna con todas). Con permiso:
+
+- **F2 Nueva**: almacén, producto, cantidad, referencia del pedido
+  (obligatoria) y vencimiento opcional `AAAA-MM-DD HH:MM` (hora de
+  Caracas). Nunca reserva más que el disponible.
+- **F3 Despachar**: saca lo reservado; vacío despacha todo lo pendiente,
+  una cantidad menor deja el resto reservado.
+- **F4 Liberar**: lo devuelve al disponible, con motivo.
+
+### Bloqueos
+
+Para mercancía que no se puede vender (dañada, en cuarentena…). **F2
+Nuevo** retiene la cantidad con su motivo, sin sacarla del almacén. **F3
+Liberar** la devuelve al disponible; **F4 Dar de baja** la saca como merma
+al costo promedio (no se deshace).
+
+### Conteos físicos
+
+1. **F2 Nuevo**: elija el almacén y una nota; se abre la captura.
+2. Escanee o escriba el producto, **Enter**, la cantidad contada, **Enter**.
+   La línea aparece con lo registrado y la diferencia, y el cursor vuelve al
+   producto para el siguiente. **Tab** lleva al costo, solo necesario si el
+   producto no tiene costo y sobran unidades. Volver a contar un producto
+   reemplaza su línea.
+3. **F9 Enviar a revisión** cuando termine.
+4. Otra persona, con permiso para aprobar, abre el conteo y pulsa **A
+   Aprobar** (aplica las diferencias como ajustes) o **X Rechazar**. Quien
+   contó o envió el conteo no puede decidirlo.
+
+### Política de existencia negativa
+
+Muestra si la empresa permite salidas en negativo y con qué límite, y los
+productos con política propia. **F2 Empresa** la habilita (con límite por
+producto y almacén) o la deshabilita; **F3 Producto** fija para un producto
+*Hereda*, *Prohíbe* o *Permite con límite*.
+
 ## Aprobar o rechazar un precio
 
 En una propuesta pendiente, con permiso para aprobar:
@@ -133,8 +225,6 @@ no cambia nada. Vea [Listas y precios](precios.md).
 
 ## Qué viene después
 
-Las próximas versiones suman a la TUI, en este orden: movimientos de
-inventario (entradas, salidas, ajustes, transferencias, reservas, bloqueos y
-conteos); compras y tasas; listas de precios y administración (usuarios,
-roles, estructura y contraseña). Mientras tanto, eso se hace con los
-comandos de las demás guías.
+Las próximas versiones suman a la TUI compras y tasas, y luego listas de
+precios y administración (usuarios, roles, estructura y contraseña).
+Mientras tanto, eso se hace con los comandos de las demás guías.

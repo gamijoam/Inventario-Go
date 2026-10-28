@@ -222,6 +222,7 @@ type fake struct {
 	units     []catalog.Unit
 	created   []appcatalog.NewProduct
 	changes   []appcatalog.Changes
+	log       *invLog
 }
 
 var (
@@ -229,6 +230,8 @@ var (
 	und    = catalog.Unit{Code: "UND", Scale: 0}
 	list   = pricing.List{Code: mustCode("GENERAL"), Name: "General", Currency: money.USD, Status: org.StatusActive}
 	ten    = decimal.MustParse("10")
+	// kardexMove es el movimiento del kardex del fake.
+	kardexMove = id.MustNew()
 )
 
 func mustSKU(s string) catalog.SKU {
@@ -294,8 +297,15 @@ func (f *fake) Login(_ context.Context, user, pw string) (tui.Session, error) {
 
 func (f *fake) Logout(context.Context) error { f.loggedOut = true; return nil }
 
-func (f *fake) Products(context.Context, string) ([]appcatalog.ProductView, error) {
-	return append([]appcatalog.ProductView(nil), f.products...), nil
+func (f *fake) Products(_ context.Context, search string) ([]appcatalog.ProductView, error) {
+	var out []appcatalog.ProductView
+	q := strings.ToLower(search)
+	for _, v := range f.products {
+		if strings.Contains(strings.ToLower(v.SKU.String()+" "+v.Name.String()), q) {
+			out = append(out, v)
+		}
+	}
+	return out, nil
 }
 
 func (f *fake) CreateProduct(_ context.Context, in appcatalog.NewProduct) (appcatalog.ProductView, error) {
@@ -353,7 +363,7 @@ func (f *fake) Stock(_ context.Context, product string) ([]stock.BalanceView, er
 }
 
 func (f *fake) Kardex(context.Context, stock.WarehouseRef, string) (stock.BalanceView, []inventory.Movement, error) {
-	m := inventory.Movement{Sequence: 2, Kind: inventory.KindPurchaseIn, Reason: inventory.ReasonPurchase, Quantity: ten, OnHandAfter: decimal.MustParse("20"),
+	m := inventory.Movement{ID: kardexMove, Sequence: 2, Kind: inventory.KindPurchaseIn, Reason: inventory.ReasonPurchase, Quantity: ten, OnHandAfter: decimal.MustParse("20"),
 		Cost: inventory.Known(decimal.MustParse("96")), ValueAfter: inventory.Known(decimal.MustParse("176")), Note: "RC-000001", OccurredAt: time.Now()}
 	return f.balance(), []inventory.Movement{m}, nil
 }
@@ -415,6 +425,8 @@ func TestLoginShowsErrorsAndHidesThePassword(t *testing.T) {
 	m, _ = send(t, m, keyEnter)
 	mustContain(t, m, "Hola, Administrador.", "admin · PRINCIPAL/PRINCIPAL", "Inventario", "Precios", "Sistema", "► Productos", "Unidades de medida")
 	m, _ = send(t, m, keyRight)
+	mustContain(t, m, "► Reservas", "Bloqueos") // con ver existencias
+	m, _ = send(t, m, keyRight)
 	mustContain(t, m, "► Precios vigentes", "Propuestas de precio")
 	m, _ = send(t, m, keyRight)
 	mustContain(t, m, "► Diagnóstico", "Cerrar sesión")
@@ -459,7 +471,7 @@ func TestProductsFilterStockAndKardex(t *testing.T) {
 func TestApproveAProposal(t *testing.T) {
 	f := newFake(all...)
 	m := login(t, f)
-	m = keys(t, m, keyRight, keyDown, keyEnter) // Precios › Propuestas
+	m = keys(t, m, keyRight, keyRight, keyDown, keyEnter) // Precios › Propuestas
 	mustContain(t, m, "PP-000002", "10 → 12 USD", "recepción")
 	m, _ = send(t, m, keyEnter)
 	mustContain(t, m, "Propuesta PP-000002", "último costo de compra 9.6 USD", "A Aprobar")
@@ -485,7 +497,7 @@ func TestApproveAProposal(t *testing.T) {
 func TestRejectAProposalAndCancel(t *testing.T) {
 	f := newFake(all...)
 	m := login(t, f)
-	m = keys(t, m, keyRight, keyDown, keyEnter, keyEnter)
+	m = keys(t, m, keyRight, keyRight, keyDown, keyEnter, keyEnter)
 	m, _ = send(t, m, key('x'))
 	m, _ = send(t, m, keyEsc) // cancelar
 	mustContain(t, m, "rechazo cancelado", "Propuesta PP-000002")

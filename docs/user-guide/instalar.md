@@ -54,10 +54,15 @@ argumentos:
    **F3** edita y **F4** inactiva.
 3. **Unidades.** *Inventario → Unidades de medida*, **F2**: cree `SACO`
    con 0 decimales.
+4. **Existencia inicial.** *Movimientos → Entrada de mercancía*: producto
+   `HARINA` (o **F5** para elegirlo), cantidad `20`, costo `1.10`, motivo
+   *Carga inicial*. Pruebe también una salida por merma, una reserva para
+   el pedido `PED-1`, un bloqueo por daño y un conteo físico con su
+   aprobación (este último por otro usuario: ver el paso 5 de abajo).
 
-Vea [Pantalla interactiva](tui.md) para todas las teclas. Las existencias,
-compras, tasas y listas de precios se registran por ahora con los comandos
-de abajo; luego se consultan y aprueban en la TUI.
+Vea [Pantalla interactiva](tui.md) para todas las teclas. Las compras, las
+tasas y las listas de precios se registran por ahora con los comandos de
+abajo; luego se consultan y aprueban en la TUI.
 
 ## Probar de punta a punta
 
@@ -85,7 +90,7 @@ Si no creó los productos en la TUI:
 .\balanzapro.exe product create --name "Queso blanco" --sku QUESO --unit KG
 ```
 
-La existencia inicial:
+La existencia inicial, si no la cargó en la TUI:
 
 ```powershell
 .\balanzapro.exe inventory in --product HARINA --qty 20 --unit-cost 1.10 --reason initial_load

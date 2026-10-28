@@ -244,6 +244,7 @@ type kardexScreen struct {
 	app     *app
 	id      int
 	bal     stock.BalanceView
+	moves   []inventory.Movement
 	list    listView
 	loading bool
 }
@@ -265,7 +266,17 @@ func (k *kardexScreen) Help() string {
 	if k.list.capturing() {
 		return "Escriba para filtrar  Enter Fijar  Esc Borrar"
 	}
+	if m := k.current(); m != nil && k.app.can(identity.PermStockAdjust) && reversible(*m) {
+		return "↑↓ Elegir  / Filtrar  F8 Revertir  R Recargar  Esc Volver"
+	}
 	return "↑↓ Elegir  / Filtrar  R Recargar  Esc Volver"
+}
+
+func (k *kardexScreen) current() *inventory.Movement {
+	if i := k.list.selected(); i >= 0 && i < len(k.moves) {
+		return &k.moves[i]
+	}
+	return nil
 }
 
 func (k *kardexScreen) Init(id int) tea.Cmd {
@@ -312,7 +323,7 @@ func (k *kardexScreen) Update(msg tea.Msg) tea.Cmd {
 			return setStatus("no se pudo cargar el kardex", msg.err)
 		}
 		d := msg.v.(kardexData)
-		k.bal = d.bal
+		k.bal, k.moves = d.bal, d.moves
 		sc := d.bal.Unit.Scale
 		rows := make([]table.Row, len(d.moves))
 		for i, m := range d.moves {
@@ -332,8 +343,13 @@ func (k *kardexScreen) Update(msg tea.Msg) tea.Cmd {
 		if cmd, done := k.list.update(msg); done {
 			return cmd
 		}
-		if msg.String() == "r" {
+		switch msg.String() {
+		case "r":
 			return k.Refresh()
+		case "f8":
+			if m := k.current(); m != nil && k.app.can(identity.PermStockAdjust) && reversible(*m) {
+				return push(newReverse(k.app, k.bal, *m))
+			}
 		}
 	default:
 		cmd, _ := k.list.update(msg)

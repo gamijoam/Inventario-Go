@@ -12,6 +12,7 @@ import (
 	"github.com/gamijoam/inventario-go/internal/domain/catalog"
 	"github.com/gamijoam/inventario-go/internal/domain/identity"
 	"github.com/gamijoam/inventario-go/internal/domain/inventory"
+	"github.com/gamijoam/inventario-go/internal/domain/org"
 	"github.com/gamijoam/inventario-go/internal/domain/pricing"
 )
 
@@ -196,4 +197,194 @@ func (b *tuiBackend) CreateUnit(ctx context.Context, code, name string, scale in
 		return catalog.Unit{}, err
 	}
 	return b.s.cat.CreateUnit(ctx, p, b.s.cur.Organization, code, name, scale)
+}
+
+// ---------- Inventario ----------
+
+// here completa la empresa y la sucursal de la sesión.
+func (b *tuiBackend) here(w stock.WarehouseRef) stock.WarehouseRef { return withDefaults(w, b.s) }
+
+func (b *tuiBackend) Warehouses(ctx context.Context) ([]org.Warehouse, error) {
+	ctx, cancel, p, err := b.call(ctx)
+	defer cancel()
+	if err != nil {
+		return nil, err
+	}
+	return b.s.org.ListWarehouses(ctx, p, b.s.cur.Company.Code.String(), b.s.cur.Branch.Code.String())
+}
+
+func (b *tuiBackend) Adjust(ctx context.Context, in stock.AdjustInput) (stock.MovementView, error) {
+	ctx, cancel, p, err := b.call(ctx)
+	defer cancel()
+	if err != nil {
+		return stock.MovementView{}, err
+	}
+	in.Where = b.here(in.Where)
+	return b.s.stock.Adjust(ctx, p, in)
+}
+
+func (b *tuiBackend) Reverse(ctx context.Context, movementID, note, key string) (stock.MovementView, error) {
+	ctx, cancel, p, err := b.call(ctx)
+	defer cancel()
+	if err != nil {
+		return stock.MovementView{}, err
+	}
+	return b.s.stock.Reverse(ctx, p, movementID, note, key)
+}
+
+func (b *tuiBackend) Transfer(ctx context.Context, in stock.TransferInput) (stock.TransferView, error) {
+	ctx, cancel, p, err := b.call(ctx)
+	defer cancel()
+	if err != nil {
+		return stock.TransferView{}, err
+	}
+	w := b.here(stock.WarehouseRef{Company: in.Company, Branch: in.Branch})
+	in.Company, in.Branch = w.Company, w.Branch
+	return b.s.stock.Transfer(ctx, p, in)
+}
+
+func (b *tuiBackend) Reservations(ctx context.Context, status inventory.HoldStatus) ([]stock.ReservationView, error) {
+	ctx, cancel, p, err := b.call(ctx)
+	defer cancel()
+	if err != nil {
+		return nil, err
+	}
+	return b.s.stock.Reservations(ctx, p, stock.HoldQuery{Status: status})
+}
+
+func (b *tuiBackend) Reserve(ctx context.Context, in stock.ReserveInput) (stock.ReservationView, error) {
+	ctx, cancel, p, err := b.call(ctx)
+	defer cancel()
+	if err != nil {
+		return stock.ReservationView{}, err
+	}
+	in.Where = b.here(in.Where)
+	return b.s.stock.Reserve(ctx, p, in)
+}
+
+func (b *tuiBackend) ConsumeReservation(ctx context.Context, id, quantity, note, key string) (stock.ReservationView, error) {
+	ctx, cancel, p, err := b.call(ctx)
+	defer cancel()
+	if err != nil {
+		return stock.ReservationView{}, err
+	}
+	return b.s.stock.ConsumeReservation(ctx, p, id, quantity, note, key)
+}
+
+func (b *tuiBackend) ReleaseReservation(ctx context.Context, id, note string) (stock.ReservationView, error) {
+	ctx, cancel, p, err := b.call(ctx)
+	defer cancel()
+	if err != nil {
+		return stock.ReservationView{}, err
+	}
+	return b.s.stock.ReleaseReservation(ctx, p, id, note)
+}
+
+func (b *tuiBackend) Blocks(ctx context.Context, status inventory.HoldStatus) ([]stock.BlockView, error) {
+	ctx, cancel, p, err := b.call(ctx)
+	defer cancel()
+	if err != nil {
+		return nil, err
+	}
+	return b.s.stock.Blocks(ctx, p, stock.HoldQuery{Status: status})
+}
+
+func (b *tuiBackend) Block(ctx context.Context, in stock.BlockInput) (stock.BlockView, error) {
+	ctx, cancel, p, err := b.call(ctx)
+	defer cancel()
+	if err != nil {
+		return stock.BlockView{}, err
+	}
+	in.Where = b.here(in.Where)
+	return b.s.stock.Block(ctx, p, in)
+}
+
+func (b *tuiBackend) CloseBlock(ctx context.Context, id string, writeOff bool, note string) (stock.BlockView, error) {
+	ctx, cancel, p, err := b.call(ctx)
+	defer cancel()
+	if err != nil {
+		return stock.BlockView{}, err
+	}
+	return b.s.stock.CloseBlock(ctx, p, id, writeOff, note)
+}
+
+func (b *tuiBackend) Counts(ctx context.Context, status inventory.CountStatus) ([]stock.CountView, error) {
+	ctx, cancel, p, err := b.call(ctx)
+	defer cancel()
+	if err != nil {
+		return nil, err
+	}
+	return b.s.stock.Counts(ctx, p, nil, status)
+}
+
+func (b *tuiBackend) CreateCount(ctx context.Context, warehouse, note string) (stock.CountView, error) {
+	ctx, cancel, p, err := b.call(ctx)
+	defer cancel()
+	if err != nil {
+		return stock.CountView{}, err
+	}
+	return b.s.stock.CreateCount(ctx, p, b.here(stock.WarehouseRef{Warehouse: warehouse}), note)
+}
+
+func (b *tuiBackend) Count(ctx context.Context, id string) (stock.CountView, error) {
+	ctx, cancel, p, err := b.call(ctx)
+	defer cancel()
+	if err != nil {
+		return stock.CountView{}, err
+	}
+	return b.s.stock.ShowCount(ctx, p, id)
+}
+
+func (b *tuiBackend) RecordCount(ctx context.Context, id, product, counted, unitCost string) (stock.CountLineView, error) {
+	ctx, cancel, p, err := b.call(ctx)
+	defer cancel()
+	if err != nil {
+		return stock.CountLineView{}, err
+	}
+	return b.s.stock.RecordCount(ctx, p, id, product, counted, unitCost)
+}
+
+func (b *tuiBackend) SubmitCount(ctx context.Context, id string) (stock.CountView, error) {
+	ctx, cancel, p, err := b.call(ctx)
+	defer cancel()
+	if err != nil {
+		return stock.CountView{}, err
+	}
+	return b.s.stock.SubmitCount(ctx, p, id)
+}
+
+func (b *tuiBackend) DecideCount(ctx context.Context, id string, approve bool, note string) (stock.CountView, error) {
+	ctx, cancel, p, err := b.call(ctx)
+	defer cancel()
+	if err != nil {
+		return stock.CountView{}, err
+	}
+	return b.s.stock.DecideCount(ctx, p, id, approve, note)
+}
+
+func (b *tuiBackend) Policy(ctx context.Context) (stock.PolicyView, error) {
+	ctx, cancel, p, err := b.call(ctx)
+	defer cancel()
+	if err != nil {
+		return stock.PolicyView{}, err
+	}
+	return b.s.stock.Policy(ctx, p, b.s.cur.Company.Code.String(), "")
+}
+
+func (b *tuiBackend) SetCompanyPolicy(ctx context.Context, enabled bool, limit string) (stock.PolicyView, error) {
+	ctx, cancel, p, err := b.call(ctx)
+	defer cancel()
+	if err != nil {
+		return stock.PolicyView{}, err
+	}
+	return b.s.stock.SetCompanyPolicy(ctx, p, b.s.cur.Company.Code.String(), enabled, limit)
+}
+
+func (b *tuiBackend) SetProductPolicy(ctx context.Context, product, mode, limit string) (stock.PolicyView, error) {
+	ctx, cancel, p, err := b.call(ctx)
+	defer cancel()
+	if err != nil {
+		return stock.PolicyView{}, err
+	}
+	return b.s.stock.SetProductPolicy(ctx, p, b.s.cur.Company.Code.String(), product, mode, limit)
 }
