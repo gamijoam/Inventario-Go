@@ -6,6 +6,7 @@ import (
 	"sync"
 
 	"github.com/gamijoam/inventario-go/internal/adapters/tui"
+	"github.com/gamijoam/inventario-go/internal/application/auth"
 	appcatalog "github.com/gamijoam/inventario-go/internal/application/catalog"
 	apppricing "github.com/gamijoam/inventario-go/internal/application/pricing"
 	"github.com/gamijoam/inventario-go/internal/application/purchasing"
@@ -569,4 +570,220 @@ func (b *tuiBackend) EffectiveRate(ctx context.Context, base, quote, date string
 		return rates.RateView{}, err
 	}
 	return b.s.fx.Effective(ctx, p, b.s.cur.Company.Code.String(), base, quote, date)
+}
+
+// ---------- Precios y administración ----------
+
+func (b *tuiBackend) PriceLists(ctx context.Context) ([]apppricing.ListView, error) {
+	ctx, cancel, p, err := b.call(ctx)
+	defer cancel()
+	if err != nil {
+		return nil, err
+	}
+	return b.s.price.Lists(ctx, p, b.s.cur.Company.Code.String())
+}
+
+func (b *tuiBackend) CreatePriceList(ctx context.Context, in apppricing.ListInput) (apppricing.ListView, error) {
+	ctx, cancel, p, err := b.call(ctx)
+	defer cancel()
+	if err != nil {
+		return apppricing.ListView{}, err
+	}
+	if in.Company == "" {
+		in.Company = b.s.cur.Company.Code.String()
+	}
+	return b.s.price.CreateList(ctx, p, in)
+}
+
+func (b *tuiBackend) SetMargin(ctx context.Context, in apppricing.MarginInput) (apppricing.ListView, error) {
+	ctx, cancel, p, err := b.call(ctx)
+	defer cancel()
+	if err != nil {
+		return apppricing.ListView{}, err
+	}
+	if in.Company == "" {
+		in.Company = b.s.cur.Company.Code.String()
+	}
+	return b.s.price.SetMargin(ctx, p, in)
+}
+
+func (b *tuiBackend) Propose(ctx context.Context, in apppricing.ProposeInput) (apppricing.ProposalView, error) {
+	ctx, cancel, p, err := b.call(ctx)
+	defer cancel()
+	if err != nil {
+		return apppricing.ProposalView{}, err
+	}
+	if in.Company == "" {
+		in.Company = b.s.cur.Company.Code.String()
+	}
+	return b.s.price.Propose(ctx, p, in)
+}
+
+func (b *tuiBackend) CancelRevision(ctx context.Context, revisionID string) (pricing.Revision, error) {
+	ctx, cancel, p, err := b.call(ctx)
+	defer cancel()
+	if err != nil {
+		return pricing.Revision{}, err
+	}
+	return b.s.price.CancelRevision(ctx, p, revisionID)
+}
+
+func (b *tuiBackend) Users(ctx context.Context) ([]auth.UserView, error) {
+	ctx, cancel, p, err := b.call(ctx)
+	defer cancel()
+	if err != nil {
+		return nil, err
+	}
+	return b.s.auth.ListUsers(ctx, p)
+}
+
+func (b *tuiBackend) CreateUser(ctx context.Context, in auth.NewUserInput) (identity.User, error) {
+	ctx, cancel, p, err := b.call(ctx)
+	defer cancel()
+	if err != nil {
+		return identity.User{}, err
+	}
+	return b.s.auth.CreateUser(ctx, p, in)
+}
+
+func (b *tuiBackend) SetUserActive(ctx context.Context, username string, active bool) (identity.User, error) {
+	ctx, cancel, p, err := b.call(ctx)
+	defer cancel()
+	if err != nil {
+		return identity.User{}, err
+	}
+	return b.s.auth.SetUserActive(ctx, p, username, active)
+}
+
+func (b *tuiBackend) Unlock(ctx context.Context, username string) error {
+	ctx, cancel, p, err := b.call(ctx)
+	defer cancel()
+	if err != nil {
+		return err
+	}
+	return b.s.auth.Unlock(ctx, p, username)
+}
+
+func (b *tuiBackend) ResetPassword(ctx context.Context, username, password string) error {
+	ctx, cancel, p, err := b.call(ctx)
+	defer cancel()
+	if err != nil {
+		return err
+	}
+	return b.s.auth.ResetPassword(ctx, p, username, password)
+}
+
+func (b *tuiBackend) ChangePassword(ctx context.Context, current, next string) error {
+	ctx, cancel, _, err := b.call(ctx)
+	defer cancel()
+	if err != nil {
+		return err
+	}
+	b.mu.Lock()
+	token := b.token
+	b.mu.Unlock()
+	who, err := b.s.auth.Authenticate(ctx, token)
+	if err != nil {
+		return err
+	}
+	return b.s.auth.ChangePassword(ctx, who, current, next)
+}
+
+func (b *tuiBackend) Assign(ctx context.Context, username, role string, where auth.ScopeRef) (auth.AssignmentView, error) {
+	ctx, cancel, p, err := b.call(ctx)
+	defer cancel()
+	if err != nil {
+		return auth.AssignmentView{}, err
+	}
+	return b.s.auth.Assign(ctx, p, username, role, where)
+}
+
+func (b *tuiBackend) Unassign(ctx context.Context, username, role string, where auth.ScopeRef) error {
+	ctx, cancel, p, err := b.call(ctx)
+	defer cancel()
+	if err != nil {
+		return err
+	}
+	return b.s.auth.Unassign(ctx, p, username, role, where)
+}
+
+func (b *tuiBackend) Roles(ctx context.Context) ([]identity.Role, error) {
+	ctx, cancel, p, err := b.call(ctx)
+	defer cancel()
+	if err != nil {
+		return nil, err
+	}
+	return b.s.auth.ListRoles(ctx, p)
+}
+
+func (b *tuiBackend) CreateRole(ctx context.Context, code, name string, perms []string) (identity.Role, error) {
+	ctx, cancel, p, err := b.call(ctx)
+	defer cancel()
+	if err != nil {
+		return identity.Role{}, err
+	}
+	return b.s.auth.CreateRole(ctx, p, code, name, perms)
+}
+
+func (b *tuiBackend) EditRole(ctx context.Context, code string, add, remove []string) (identity.Role, error) {
+	ctx, cancel, p, err := b.call(ctx)
+	defer cancel()
+	if err != nil {
+		return identity.Role{}, err
+	}
+	return b.s.auth.EditRole(ctx, p, code, add, remove)
+}
+
+func (b *tuiBackend) Companies(ctx context.Context) ([]org.Company, error) {
+	ctx, cancel, p, err := b.call(ctx)
+	defer cancel()
+	if err != nil {
+		return nil, err
+	}
+	return b.s.org.ListCompanies(ctx, p)
+}
+
+func (b *tuiBackend) Branches(ctx context.Context, company string) ([]org.Branch, error) {
+	ctx, cancel, p, err := b.call(ctx)
+	defer cancel()
+	if err != nil {
+		return nil, err
+	}
+	return b.s.org.ListBranches(ctx, p, company)
+}
+
+func (b *tuiBackend) WarehousesOf(ctx context.Context, company, branch string) ([]org.Warehouse, error) {
+	ctx, cancel, p, err := b.call(ctx)
+	defer cancel()
+	if err != nil {
+		return nil, err
+	}
+	return b.s.org.ListWarehouses(ctx, p, company, branch)
+}
+
+func (b *tuiBackend) CreateCompany(ctx context.Context, code, legalName, rif, currency string) (org.Company, error) {
+	ctx, cancel, p, err := b.call(ctx)
+	defer cancel()
+	if err != nil {
+		return org.Company{}, err
+	}
+	return b.s.org.CreateCompany(ctx, p, code, legalName, rif, currency)
+}
+
+func (b *tuiBackend) CreateBranch(ctx context.Context, company, code, name string) (org.Branch, error) {
+	ctx, cancel, p, err := b.call(ctx)
+	defer cancel()
+	if err != nil {
+		return org.Branch{}, err
+	}
+	return b.s.org.CreateBranch(ctx, p, company, code, name)
+}
+
+func (b *tuiBackend) CreateWarehouse(ctx context.Context, company, branch, code, name string) (org.Warehouse, error) {
+	ctx, cancel, p, err := b.call(ctx)
+	defer cancel()
+	if err != nil {
+		return org.Warehouse{}, err
+	}
+	return b.s.org.CreateWarehouse(ctx, p, company, branch, code, name)
 }

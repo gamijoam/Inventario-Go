@@ -224,6 +224,8 @@ type fake struct {
 	changes   []appcatalog.Changes
 	log       *invLog
 	blog      *buyLog
+	alog      *adminLog
+	scheduled bool // Prices trae un precio programado
 }
 
 var (
@@ -371,7 +373,11 @@ func (f *fake) Kardex(context.Context, stock.WarehouseRef, string) (stock.Balanc
 
 func (f *fake) Prices(context.Context, string) ([]apppricing.PriceView, error) {
 	rev := pricing.Revision{Version: 1, Price: ten, Status: pricing.RevisionPublished}
-	return []apppricing.PriceView{{List: list, Product: harina, Current: &rev, Pending: &f.prop.Proposal}}, nil
+	v := apppricing.PriceView{List: list, Product: harina, Current: &rev, Pending: &f.prop.Proposal}
+	if f.scheduled {
+		v.Scheduled = []pricing.Revision{{ID: kardexMove, Version: 2, Price: decimal.MustParse("11"), EffectiveAt: time.Date(2026, 11, 1, 12, 0, 0, 0, time.UTC)}}
+	}
+	return []apppricing.PriceView{v}, nil
 }
 
 func (f *fake) Proposals(_ context.Context, status pricing.ProposalStatus) ([]apppricing.ProposalView, error) {
@@ -527,7 +533,7 @@ func TestReadOnlyUserCannotDecide(t *testing.T) {
 func TestLogout(t *testing.T) {
 	f := newFake(all...)
 	m := login(t, f)
-	m = keys(t, m, keyLeft, keyDown, keyDown) // Sistema, el último menú
+	m = keys(t, m, keyLeft, keyDown, keyDown, keyDown) // Sistema, el último menú
 	mustContain(t, m, "► Cerrar sesión")
 	m, _ = send(t, m, keyEnter)
 	if !f.loggedOut {
@@ -582,7 +588,7 @@ func TestSetupWizardConfiguresAndLogsIn(t *testing.T) {
 		t.Fatalf("setup: %+v", got)
 	}
 	mustContain(t, m, "Hola, Administrador.", "► Productos")
-	m = keys(t, m, keyLeft, keyDown, keyDown, keyEnter) // Cerrar sesión: el backend ya es el nuevo
+	m = keys(t, m, keyLeft, keyDown, keyDown, keyDown, keyEnter) // Cerrar sesión: el backend ya es el nuevo
 	if !f.loggedOut {
 		t.Fatal("tras el asistente la TUI debe usar el backend configurado")
 	}

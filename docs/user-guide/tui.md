@@ -5,7 +5,7 @@ pantalla interactiva. Se maneja solo con el teclado, al estilo de la
 configuración de una BIOS:
 
 ```
- BalanzaPro  Inventario  Movimientos  Compras  Precios  Sistema   admin · PRINCIPAL
+ BalanzaPro Inventario Movimientos Compras Precios Administración Sistema
 ─────────────────────────────────────────────────────────────────────────────────────
  Inventario                                                  │ Ayuda
                                                              │
@@ -81,8 +81,14 @@ comandos: cerrar sesión en uno la cierra en el otro.
 | | Tasas de cambio | Tasas con su fuente, versionadas | ver tasas |
 | Precios | Precios vigentes | Precio por lista, el programado y la propuesta pendiente | ver precios |
 | | Propuestas de precio | Pendientes (**T** muestra todas); aprobar o rechazar | ver precios |
+| | Proponer precio | Un precio nuevo para un producto en una lista | proponer precios |
+| | Listas de precios | Listas, su margen y los márgenes por producto | ver precios (gestionar: listas) |
+| Administración | Usuarios | Usuarios, roles asignados, contraseñas y bloqueos | ver o gestionar usuarios |
+| | Roles | Permisos de cada rol, con casillas | gestionar roles o ver usuarios |
+| | Estructura | Empresas, sucursales y almacenes | ver la organización |
 | Sistema | Diagnóstico | Las verificaciones de `balanzapro doctor`; **R** repite | — |
 | | Versión | Versión, commit y fecha de compilación | — |
+| | Cambiar mi contraseña | Pide la actual y la nueva dos veces | — |
 | | Cerrar sesión | Cierra la sesión de este equipo | — |
 | | Salir | Cierra BalanzaPro | — |
 
@@ -287,8 +293,58 @@ Si el precio cambió después de la propuesta, o el nuevo queda por debajo
 del costo sin el permiso extraordinario, la confirmación muestra el motivo y
 no cambia nada. Vea [Listas y precios](precios.md).
 
+## Listas y propuestas
+
+- **Precios → Listas de precios**: **F2 Nueva** (código, nombre, moneda y
+  margen objetivo), **F3 Margen** de la lista seleccionada (vacío la deja
+  sin margen) y **F4 Margen de producto**, una excepción para un producto
+  (vacío vuelve al de la lista).
+- **Precios → Proponer precio**: lista, producto, precio y nota. Queda
+  pendiente hasta que alguien con permiso la apruebe.
+- En **Precios vigentes**, **F2** propone un precio para el producto
+  elegido y **F4 Anular programado** cancela un precio aprobado para más
+  adelante (el vigente no cambia).
+
+## Administración
+
+### Usuarios
+
+La lista muestra cada usuario con su estado (activo, inactivo o bloqueado
+por intentos fallidos) y sus roles. **F2 Nuevo** pide usuario, nombre y la
+contraseña dos veces (no puede contener el nombre de usuario). **Enter**
+abre el usuario:
+
+- **F2 Asignar rol**: el rol y su ámbito, elegidos en cascada: *Toda la
+  organización*, *Una empresa*, *Una sucursal* o *Un almacén*; al cambiar
+  la empresa se recalculan sus sucursales, y al cambiar la sucursal, sus
+  almacenes.
+- **F8 Quitar** el rol elegido.
+- **F3 Activar/Inactivar**: un usuario inactivo no inicia sesión y se le
+  cierran las abiertas.
+- **F5 Restablecer contraseña** y, si está bloqueado, **F6 Desbloquear**.
+
+### Roles
+
+Los roles de fábrica (ADMIN_ORG, ENCARGADO, CAJERO…) se ven pero no se
+editan: **F7 Copiar como nuevo** crea uno propio con sus mismos permisos.
+**F2 Nuevo** parte de cero. En el editor, cada permiso es una casilla:
+**↑/↓** se mueve, **Espacio** marca o desmarca y **F10** guarda. Los
+permisos extraordinarios están al final, marcados como tales.
+
+### Estructura
+
+Empresas, con sus sucursales y almacenes debajo. **F2 Empresa** crea una
+empresa (con su moneda de valoración, que no se cambia), **F3 Sucursal**
+una sucursal en la empresa de la fila elegida y **F4 Almacén** un almacén en
+la sucursal elegida.
+
+### Mi contraseña
+
+**Sistema → Cambiar mi contraseña** pide la actual y la nueva dos veces. Se
+cierran sus otras sesiones; esta sigue abierta.
+
 ## Qué viene después
 
-La próxima versión suma a la TUI las listas de precios y la administración
-(usuarios, roles, estructura y contraseña). Mientras tanto, eso se hace con
-los comandos de las demás guías.
+Con esto, todo lo de M1 a M3 se hace desde la TUI. Los comandos siguen
+disponibles para scripts y automatizaciones. Las próximas versiones suman
+la caja y las ventas (M4), primero en el sistema y enseguida en la TUI.

@@ -8,6 +8,7 @@ import (
 
 	"github.com/gamijoam/inventario-go/internal/adapters/cli"
 	"github.com/gamijoam/inventario-go/internal/adapters/tui"
+	"github.com/gamijoam/inventario-go/internal/application/auth"
 	appcatalog "github.com/gamijoam/inventario-go/internal/application/catalog"
 	apporg "github.com/gamijoam/inventario-go/internal/application/org"
 	apppricing "github.com/gamijoam/inventario-go/internal/application/pricing"
@@ -381,5 +382,110 @@ func TestTUIPurchasesAndRates(t *testing.T) {
 	}
 	if r := run(t, admin, "inventory", "verify"); r.code != cli.ExitOK {
 		t.Fatalf("verify: %d %s", r.code, r.stdout)
+	}
+}
+
+// Precios y administración desde la TUI sobre los servicios reales.
+func TestTUIPricingAndAdministration(t *testing.T) {
+	admin := setupSQLite(t)
+	mustRun(t, admin, "product", "create", "--name", "Harina", "--sku", "HARINA")
+	o := admin
+	o.interactive = true
+	o.tui = func(opts tui.Options) {
+		ctx := context.Background()
+		b := opts.Backend
+		if _, err := b.Resume(ctx); err != nil {
+			t.Fatalf("sesión: %v", err)
+		}
+		if l, err := b.CreatePriceList(ctx, apppricing.ListInput{Code: "general", Name: "General", Margin: "20"}); err != nil || l.Margin == nil {
+			t.Fatalf("lista: %+v %v", l, err)
+		}
+		if _, err := b.SetMargin(ctx, apppricing.MarginInput{List: "GENERAL", Product: "HARINA", Margin: "30"}); err != nil {
+			t.Fatalf("margen: %v", err)
+		}
+		if lists, err := b.PriceLists(ctx); err != nil || len(lists) != 1 {
+			t.Fatalf("listas: %+v %v", lists, err)
+		}
+		pv, err := b.Propose(ctx, apppricing.ProposeInput{List: "GENERAL", Product: "HARINA", Price: "10"})
+		if err != nil || pv.Status != pricing.ProposalPending {
+			t.Fatalf("propuesta: %+v %v", pv, err)
+		}
+		if _, err := b.Approve(ctx, pv.Number, apppricing.ApproveInput{At: "2030-01-01 08:00"}); err != nil {
+			t.Fatalf("aprobar programado: %v", err)
+		}
+		prices, err := b.Prices(ctx, "HARINA")
+		if err != nil || len(prices) != 1 || len(prices[0].Scheduled) != 1 {
+			t.Fatalf("precios: %+v %v", prices, err)
+		}
+		if r, err := b.CancelRevision(ctx, prices[0].Scheduled[0].ID.String()); err != nil || r.Status != pricing.RevisionCancelled {
+			t.Fatalf("anular programado: %+v %v", r, err)
+		}
+
+		if _, err := b.CreateCompany(ctx, "otra", "Otra, C.A.", "", "VES"); err != nil {
+			t.Fatalf("empresa: %v", err)
+		}
+		if _, err := b.CreateBranch(ctx, "OTRA", "centro", "Centro"); err != nil {
+			t.Fatalf("sucursal: %v", err)
+		}
+		if _, err := b.CreateWarehouse(ctx, "OTRA", "CENTRO", "c1", "Centro 1"); err != nil {
+			t.Fatalf("almacén: %v", err)
+		}
+		if cs, _ := b.Companies(ctx); len(cs) != 2 {
+			t.Fatalf("empresas: %+v", cs)
+		}
+		if ws, err := b.WarehousesOf(ctx, "OTRA", "CENTRO"); err != nil || len(ws) != 1 {
+			t.Fatalf("almacenes: %+v %v", ws, err)
+		}
+		if bs, err := b.Branches(ctx, "OTRA"); err != nil || len(bs) != 1 {
+			t.Fatalf("sucursales: %+v %v", bs, err)
+		}
+
+		if _, err := b.CreateRole(ctx, "auditor", "Auditor", []string{string(identity.PermStockRead)}); err != nil {
+			t.Fatalf("rol: %v", err)
+		}
+		if r, err := b.EditRole(ctx, "AUDITOR", []string{string(identity.PermPriceRead)}, []string{string(identity.PermStockRead)}); err != nil ||
+			len(r.Permissions) != 1 || r.Permissions[0] != identity.PermPriceRead {
+			t.Fatalf("editar rol: %+v %v", r, err)
+		}
+		if roles, err := b.Roles(ctx); err != nil || len(roles) < 2 {
+			t.Fatalf("roles: %d %v", len(roles), err)
+		}
+		if _, err := b.CreateUser(ctx, auth.NewUserInput{Username: "pedro", DisplayName: "Pedro", Password: userPassword}); err != nil {
+			t.Fatalf("usuario: %v", err)
+		}
+		if x, err := b.Assign(ctx, "pedro", "AUDITOR", auth.ScopeRef{Company: "OTRA", Branch: "CENTRO", Warehouse: "C1"}); err != nil || x.RoleCode.String() != "AUDITOR" {
+			t.Fatalf("asignar: %+v %v", x, err)
+		}
+		if err := b.ResetPassword(ctx, "pedro", userPassword+"x"); err != nil {
+			t.Fatalf("restablecer: %v", err)
+		}
+		if err := b.Unlock(ctx, "pedro"); err != nil {
+			t.Fatalf("desbloquear: %v", err)
+		}
+		users, err := b.Users(ctx)
+		if err != nil || len(users) != 2 {
+			t.Fatalf("usuarios: %+v %v", users, err)
+		}
+		if err := b.Unassign(ctx, "pedro", "AUDITOR", auth.ScopeRef{Company: "OTRA", Branch: "CENTRO", Warehouse: "C1"}); err != nil {
+			t.Fatalf("quitar: %v", err)
+		}
+		if u, err := b.SetUserActive(ctx, "pedro", false); err != nil || u.Status == identity.StatusActive {
+			t.Fatalf("inactivar: %+v %v", u, err)
+		}
+		if err := b.ChangePassword(ctx, "mala", "nueva clave segura 1"); err == nil {
+			t.Error("cambiar con la actual incorrecta")
+		}
+		if err := b.ChangePassword(ctx, adminPassword, "nueva clave segura 1"); err != nil {
+			t.Fatalf("cambiar contraseña: %v", err)
+		}
+		if _, err := b.Products(ctx, ""); err != nil {
+			t.Fatalf("la sesión actual sigue abierta tras cambiar la contraseña: %v", err)
+		}
+	}
+	if r := run(t, o); r.code != cli.ExitOK {
+		t.Fatalf("tui: %d %s", r.code, r.stderr)
+	}
+	if r := run(t, withStdin(admin, "nueva clave segura 1"), "auth", "login", "--user", "admin", "--password-stdin"); r.code != cli.ExitOK {
+		t.Fatalf("login con la contraseña nueva: %d %s", r.code, r.stderr)
 	}
 }

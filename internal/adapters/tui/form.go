@@ -127,6 +127,9 @@ type formScreen struct {
 	// key es la clave de idempotencia del formulario: un reintento tras
 	// perder la respuesta no aplica la operación dos veces.
 	key string
+	// changed, si existe, se llama al cambiar una selección (p. ej. para
+	// recalcular las opciones de los campos que dependen de ella).
+	changed func(f *formScreen, key string)
 }
 
 // prepared es el resultado de prepare.
@@ -291,6 +294,9 @@ func (f *formScreen) Update(msg tea.Msg) tea.Cmd {
 					d = -1
 				}
 				cur.choice = (cur.choice + d + len(cur.options)) % len(cur.options)
+				if f.changed != nil {
+					f.changed(f, cur.key)
+				}
 				return nil
 			}
 		}
