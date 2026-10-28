@@ -8,6 +8,7 @@ import (
 
 	"charm.land/bubbles/v2/table"
 	tea "charm.land/bubbletea/v2"
+	"github.com/charmbracelet/x/ansi"
 
 	appcatalog "github.com/gamijoam/inventario-go/internal/application/catalog"
 	"github.com/gamijoam/inventario-go/internal/domain/catalog"
@@ -75,8 +76,10 @@ type confirmScreen struct {
 	message string
 	run     func() (any, error)
 	ok      string // mensaje al volver tras ejecutarla
-	busy    bool
-	errMsg  string
+	// result, si existe, arma el mensaje con el resultado.
+	result func(v any) string
+	busy   bool
+	errMsg string
 }
 
 func (c *confirmScreen) Title() string { return c.title }
@@ -99,6 +102,9 @@ func (c *confirmScreen) Update(msg tea.Msg) tea.Cmd {
 			c.errMsg = describe(msg.err)
 			return nil
 		}
+		if c.result != nil {
+			return back(c.result(msg.v))
+		}
 		return back(c.ok)
 	case tea.KeyPressMsg:
 		if c.busy {
@@ -115,8 +121,8 @@ func (c *confirmScreen) Update(msg tea.Msg) tea.Cmd {
 	return nil
 }
 
-func (c *confirmScreen) View(int, int) string {
-	out := c.message + "\n\n¿Confirma? Enter sí · Esc no"
+func (c *confirmScreen) View(width, _ int) string {
+	out := ansi.Wordwrap(c.message, width, " ") + "\n\n¿Confirma? Enter sí · Esc no"
 	switch {
 	case c.busy:
 		out += "\n\nProcesando…"

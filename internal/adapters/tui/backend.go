@@ -5,11 +5,15 @@ import (
 
 	appcatalog "github.com/gamijoam/inventario-go/internal/application/catalog"
 	apppricing "github.com/gamijoam/inventario-go/internal/application/pricing"
+	"github.com/gamijoam/inventario-go/internal/application/purchasing"
+	"github.com/gamijoam/inventario-go/internal/application/rates"
 	"github.com/gamijoam/inventario-go/internal/application/stock"
 	"github.com/gamijoam/inventario-go/internal/domain/catalog"
 	"github.com/gamijoam/inventario-go/internal/domain/identity"
 	"github.com/gamijoam/inventario-go/internal/domain/inventory"
+	"github.com/gamijoam/inventario-go/internal/domain/org"
 	"github.com/gamijoam/inventario-go/internal/domain/pricing"
+	"github.com/gamijoam/inventario-go/internal/domain/purchase"
 )
 
 // Backend conecta la TUI con los casos de uso de la capa application. La
@@ -38,6 +42,66 @@ type Backend interface {
 	Proposal(ctx context.Context, ref string) (apppricing.ProposalView, error)
 	Approve(ctx context.Context, ref string, in apppricing.ApproveInput) (apppricing.ProposalView, error)
 	Reject(ctx context.Context, ref, note string) (apppricing.ProposalView, error)
+
+	// Inventario. Los almacenes van por código dentro de la empresa y la
+	// sucursal de la sesión; vacío es el único almacén activo de la
+	// sucursal. Cada formulario envía su propia clave de idempotencia: si
+	// la respuesta se pierde y se reintenta, no se aplica dos veces.
+	Warehouses(ctx context.Context) ([]org.Warehouse, error)
+	Adjust(ctx context.Context, in stock.AdjustInput) (stock.MovementView, error)
+	Reverse(ctx context.Context, movementID, note, key string) (stock.MovementView, error)
+	Transfer(ctx context.Context, in stock.TransferInput) (stock.TransferView, error)
+
+	Reservations(ctx context.Context, status inventory.HoldStatus) ([]stock.ReservationView, error)
+	Reserve(ctx context.Context, in stock.ReserveInput) (stock.ReservationView, error)
+	// ConsumeReservation despacha quantity (vacío: todo lo pendiente).
+	ConsumeReservation(ctx context.Context, id, quantity, note, key string) (stock.ReservationView, error)
+	ReleaseReservation(ctx context.Context, id, note string) (stock.ReservationView, error)
+
+	Blocks(ctx context.Context, status inventory.HoldStatus) ([]stock.BlockView, error)
+	Block(ctx context.Context, in stock.BlockInput) (stock.BlockView, error)
+	// CloseBlock libera el bloqueo o, con writeOff, lo da de baja como merma.
+	CloseBlock(ctx context.Context, id string, writeOff bool, note string) (stock.BlockView, error)
+
+	// Counts lista los conteos; status vacío, todos.
+	Counts(ctx context.Context, status inventory.CountStatus) ([]stock.CountView, error)
+	CreateCount(ctx context.Context, warehouse, note string) (stock.CountView, error)
+	Count(ctx context.Context, id string) (stock.CountView, error)
+	RecordCount(ctx context.Context, id, product, counted, unitCost string) (stock.CountLineView, error)
+	SubmitCount(ctx context.Context, id string) (stock.CountView, error)
+	DecideCount(ctx context.Context, id string, approve bool, note string) (stock.CountView, error)
+
+	// Policy es la política de existencia negativa de la empresa de la sesión.
+	Policy(ctx context.Context) (stock.PolicyView, error)
+	SetCompanyPolicy(ctx context.Context, enabled bool, limit string) (stock.PolicyView, error)
+	SetProductPolicy(ctx context.Context, product, mode, limit string) (stock.PolicyView, error)
+
+	// Compras. Las órdenes y recepciones van por número o ID; la empresa y
+	// la sucursal son las de la sesión.
+	Suppliers(ctx context.Context) ([]purchase.Supplier, error)
+	CreateSupplier(ctx context.Context, code, name, rif string) (purchase.Supplier, error)
+	Orders(ctx context.Context, status purchase.OrderStatus) ([]purchasing.OrderView, error)
+	Order(ctx context.Context, ref string) (purchasing.OrderView, error)
+	CreateOrder(ctx context.Context, in purchasing.OrderInput) (purchasing.OrderView, error)
+	CancelOrder(ctx context.Context, ref string) (purchasing.OrderView, error)
+	Receipts(ctx context.Context, status purchase.ReceiptStatus) ([]purchasing.ReceiptView, error)
+	Receipt(ctx context.Context, ref string) (purchasing.ReceiptView, error)
+	CreateReceipt(ctx context.Context, in purchasing.ReceiptInput) (purchasing.ReceiptView, error)
+	SetReceiptLine(ctx context.Context, ref string, in purchasing.LineInput) (purchasing.ReceiptView, error)
+	RemoveReceiptLine(ctx context.Context, ref, product string) (purchasing.ReceiptView, error)
+	AddExpense(ctx context.Context, ref string, in purchasing.ExpenseInput) (purchasing.ReceiptView, error)
+	ConfirmReceipt(ctx context.Context, ref string) (purchasing.ReceiptView, error)
+	CancelReceipt(ctx context.Context, ref string) (purchasing.ReceiptView, error)
+	// Costs reúne el CPP, la última compra y el costo de reposición.
+	Costs(ctx context.Context, product string) (purchasing.CostView, error)
+	SetReplacementCost(ctx context.Context, product, unitCost, currency, note string) (purchasing.CostView, error)
+
+	// Tasas de cambio de la empresa de la sesión.
+	Rates(ctx context.Context) ([]rates.RateView, error)
+	SetRate(ctx context.Context, in rates.SetInput) (rates.RateView, error)
+	// EffectiveRate es la tasa del par que rige en date (AAAA-MM-DD; vacía,
+	// hoy); envuelve exchange.ErrNoRate si no hay.
+	EffectiveRate(ctx context.Context, base, quote, date string) (rates.RateView, error)
 }
 
 // Session es el usuario conectado y el ámbito de esta instalación.

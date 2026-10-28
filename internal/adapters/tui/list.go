@@ -62,8 +62,10 @@ func (l *listView) apply() {
 		}
 	}
 	l.t.SetRows(shown)
-	if l.t.Cursor() >= len(shown) {
-		l.t.SetCursor(max(len(shown)-1, 0))
+	// Con la lista vacía la tabla queda sin fila elegida; al llegar filas,
+	// elige la primera.
+	if c := l.t.Cursor(); c >= len(shown) || c < 0 {
+		l.t.SetCursor(max(min(c, len(shown)-1), 0))
 	}
 }
 
