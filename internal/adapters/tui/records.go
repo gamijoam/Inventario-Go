@@ -30,6 +30,8 @@ type recordsScreen[T any] struct {
 	// showAll alterna con T; fetch recibe si se piden todos.
 	toggle  bool
 	showAll bool
+	// subset nombra lo que se ve sin T; vacío, "activos".
+	subset  string
 	fetch   func(all bool) ([]T, error)
 	row     func(T) table.Row
 	actions []action[T]
@@ -37,6 +39,9 @@ type recordsScreen[T any] struct {
 
 func (r *recordsScreen[T]) Title() string {
 	if r.toggle && !r.showAll {
+		if r.subset != "" {
+			return r.title + " (" + r.subset + ")"
+		}
 		return r.title + " (activos)"
 	}
 	return r.title
@@ -77,7 +82,7 @@ func (r *recordsScreen[T]) Help() string {
 	}
 	if r.toggle {
 		if r.showAll {
-			parts = append(parts, "T Solo activos")
+			parts = append(parts, "T Solo "+cmpOr(r.subset, "activos"))
 		} else {
 			parts = append(parts, "T Todos")
 		}
@@ -140,4 +145,11 @@ func (r *recordsScreen[T]) View(int, int) string {
 		return "Cargando…"
 	}
 	return r.list.view(r.empty)
+}
+
+func cmpOr(a, b string) string {
+	if a != "" {
+		return a
+	}
+	return b
 }

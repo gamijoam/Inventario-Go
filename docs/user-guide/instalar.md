@@ -60,9 +60,16 @@ argumentos:
    el pedido `PED-1`, un bloqueo por daño y un conteo físico con su
    aprobación (este último por otro usuario: ver el paso 5 de abajo).
 
-Vea [Pantalla interactiva](tui.md) para todas las teclas. Las compras, las
-tasas y las listas de precios se registran por ahora con los comandos de
-abajo; luego se consultan y aprueban en la TUI.
+5. **Compra en bolívares.** *Compras → Proveedores*, **F2**: `DIST`,
+   `Distribuidora, C.A.`. Luego *Compras → Recepciones*, **F2**: proveedor
+   `DIST`, moneda `VES`, factura `FAC-1`. En el documento: **F2** agrega
+   `HARINA`, 30, costo 57; como falta la tasa del día, **F6** la registra
+   (45.725, oficial BCV); **F3** agrega el flete de 2 USD; **F9** confirma.
+   El kardex de HARINA muestra la compra y el nuevo costo promedio.
+
+Vea [Pantalla interactiva](tui.md) para todas las teclas. Las listas de
+precios se crean por ahora con los comandos de abajo (paso 4); luego las
+propuestas se aprueban en la TUI.
 
 ## Probar de punta a punta
 
@@ -98,6 +105,8 @@ La existencia inicial, si no la cargó en la TUI:
 ```
 
 ### 3. Tasa y compra en bolívares
+
+Si no la hizo en la TUI:
 
 ```powershell
 .\balanzapro.exe rate set --base USD --quote VES --rate 45.725 --source official --label BCV

@@ -223,6 +223,7 @@ type fake struct {
 	created   []appcatalog.NewProduct
 	changes   []appcatalog.Changes
 	log       *invLog
+	blog      *buyLog
 }
 
 var (

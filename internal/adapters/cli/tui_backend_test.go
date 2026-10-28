@@ -11,11 +11,15 @@ import (
 	appcatalog "github.com/gamijoam/inventario-go/internal/application/catalog"
 	apporg "github.com/gamijoam/inventario-go/internal/application/org"
 	apppricing "github.com/gamijoam/inventario-go/internal/application/pricing"
+	"github.com/gamijoam/inventario-go/internal/application/purchasing"
+	"github.com/gamijoam/inventario-go/internal/application/rates"
 	"github.com/gamijoam/inventario-go/internal/application/stock"
 	"github.com/gamijoam/inventario-go/internal/domain/catalog"
+	"github.com/gamijoam/inventario-go/internal/domain/exchange"
 	"github.com/gamijoam/inventario-go/internal/domain/identity"
 	"github.com/gamijoam/inventario-go/internal/domain/inventory"
 	"github.com/gamijoam/inventario-go/internal/domain/pricing"
+	"github.com/gamijoam/inventario-go/internal/domain/purchase"
 )
 
 // La TUI recibe un backend sobre la base real: comparte la sesión con los
@@ -289,6 +293,91 @@ func TestTUIInventoryOperations(t *testing.T) {
 	run(t, enc)
 	if r := run(t, admin, "inventory", "stock", "--product", "HARINA"); !strings.Contains(r.stdout, "11") {
 		t.Fatalf("existencia tras el conteo: %s", r.stdout)
+	}
+	if r := run(t, admin, "inventory", "verify"); r.code != cli.ExitOK {
+		t.Fatalf("verify: %d %s", r.code, r.stdout)
+	}
+}
+
+// Compras y tasas desde la TUI: orden, recepción en bolívares contra la
+// orden, tasa registrada al vuelo, gasto, confirmación y costos.
+func TestTUIPurchasesAndRates(t *testing.T) {
+	admin := setupSQLite(t)
+	mustRun(t, admin, "product", "create", "--name", "Harina", "--sku", "HARINA")
+	o := admin
+	o.interactive = true
+	o.tui = func(opts tui.Options) {
+		ctx := context.Background()
+		b := opts.Backend
+		if _, err := b.Resume(ctx); err != nil {
+			t.Fatalf("sesión: %v", err)
+		}
+		if s, err := b.CreateSupplier(ctx, "dist", "Distribuidora", ""); err != nil || s.Code.String() != "DIST" {
+			t.Fatalf("proveedor: %+v %v", s, err)
+		}
+		if list, err := b.Suppliers(ctx); err != nil || len(list) != 1 {
+			t.Fatalf("proveedores: %+v %v", list, err)
+		}
+		ord, err := b.CreateOrder(ctx, purchasing.OrderInput{Supplier: "DIST", Currency: "VES",
+			Lines: []purchasing.LineInput{{Product: "HARINA", Quantity: "30", UnitCost: "57"}}})
+		if err != nil || ord.Status != purchase.OrderOpen {
+			t.Fatalf("orden: %+v %v", ord, err)
+		}
+		if open, _ := b.Orders(ctx, purchase.OrderOpen); len(open) != 1 {
+			t.Fatalf("órdenes abiertas: %+v", open)
+		}
+		rc, err := b.CreateReceipt(ctx, purchasing.ReceiptInput{Order: ord.Number, Document: "FAC-1"})
+		if err != nil || rc.Currency.Code() != "VES" || rc.Order != ord.Number || rc.Supplier.Code.String() != "DIST" {
+			t.Fatalf("recepción contra la orden: %+v %v", rc, err)
+		}
+		if _, err := b.SetReceiptLine(ctx, rc.Number, purchasing.LineInput{Product: "HARINA", Quantity: "30", UnitCost: "57"}); err != nil {
+			t.Fatalf("línea: %v", err)
+		}
+		if _, err := b.EffectiveRate(ctx, "USD", "VES", rc.DocumentDate.Format("2006-01-02")); !errors.Is(err, exchange.ErrNoRate) {
+			t.Fatalf("sin tasa: %v", err)
+		}
+		if _, err := b.ConfirmReceipt(ctx, rc.Number); !errors.Is(err, exchange.ErrNoRate) {
+			t.Fatalf("confirmar sin tasa: %v", err)
+		}
+		if r, err := b.SetRate(ctx, rates.SetInput{Base: "USD", Quote: "VES", Rate: "45.725", Source: "official", Label: "BCV"}); err != nil || r.Version != 1 {
+			t.Fatalf("tasa: %+v %v", r, err)
+		}
+		if r, err := b.EffectiveRate(ctx, "VES", "USD", ""); err != nil || r.Value.String() != "45.725" {
+			t.Fatalf("tasa vigente: %+v %v", r, err)
+		}
+		if _, err := b.AddExpense(ctx, rc.Number, purchasing.ExpenseInput{Concept: "Flete", Amount: "2", Currency: "USD"}); err != nil {
+			t.Fatalf("gasto: %v", err)
+		}
+		done, err := b.ConfirmReceipt(ctx, rc.Number)
+		if err != nil || done.Status != purchase.ReceiptConfirmed || done.RateID.IsZero() {
+			t.Fatalf("confirmar: %+v %v", done, err)
+		}
+		if got, _ := b.Order(ctx, ord.Number); got.Status != purchase.OrderReceived {
+			t.Errorf("la orden recibida por completo: %s", got.Status)
+		}
+		c, err := b.Costs(ctx, "HARINA")
+		if err != nil || c.Last == nil || c.Last.Receipt != rc.Number || len(c.Balances) != 1 || c.Balances[0].OnHand.String() != "30" {
+			t.Fatalf("costos: %+v %v", c, err)
+		}
+		if c, err := b.SetReplacementCost(ctx, "HARINA", "1.40", "", "lista nueva"); err != nil || len(c.Replacement) != 1 {
+			t.Fatalf("reposición: %+v %v", c, err)
+		}
+		if list, err := b.Rates(ctx); err != nil || len(list) != 1 {
+			t.Fatalf("tasas: %+v %v", list, err)
+		}
+		draft, err := b.CreateReceipt(ctx, purchasing.ReceiptInput{Supplier: "DIST"})
+		if err != nil {
+			t.Fatalf("recepción directa: %v", err)
+		}
+		if v, err := b.CancelReceipt(ctx, draft.Number); err != nil || v.Status != purchase.ReceiptCancelled {
+			t.Fatalf("anular: %+v %v", v, err)
+		}
+		if list, _ := b.Receipts(ctx, ""); len(list) != 2 {
+			t.Fatalf("recepciones: %d", len(list))
+		}
+	}
+	if r := run(t, o); r.code != cli.ExitOK {
+		t.Fatalf("tui: %d %s", r.code, r.stderr)
 	}
 	if r := run(t, admin, "inventory", "verify"); r.code != cli.ExitOK {
 		t.Fatalf("verify: %d %s", r.code, r.stdout)

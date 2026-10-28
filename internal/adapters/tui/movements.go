@@ -184,16 +184,31 @@ func warehouseF(key, label string) *field {
 // de almacén del formulario. Si el usuario no puede listarlos, queda el
 // almacén de la sucursal.
 func withWarehouses(a *app, f *formScreen) *formScreen {
-	f.prepare = func() (any, error) {
-		list, err := a.opts.Backend.Warehouses(a.ctx)
-		if err != nil {
-			return []org.Warehouse(nil), nil
-		}
-		return list, nil
+	// Se encadena con la carga propia del formulario, si la tiene.
+	prevPrepare, prevReady := f.prepare, f.ready
+	type both struct {
+		ws    []org.Warehouse
+		extra any
 	}
-	f.ready = func(f *formScreen, v any) {
+	f.prepare = func() (any, error) {
+		var v both
+		if prevPrepare != nil {
+			extra, err := prevPrepare()
+			if err != nil {
+				return nil, err
+			}
+			v.extra = extra
+		}
+		v.ws, _ = a.opts.Backend.Warehouses(a.ctx) // sin permiso, el de la sucursal
+		return v, nil
+	}
+	f.ready = func(f *formScreen, raw any) {
+		v := raw.(both)
+		if prevReady != nil {
+			prevReady(f, v.extra)
+		}
 		var codes, labels []string
-		for _, w := range v.([]org.Warehouse) {
+		for _, w := range v.ws {
 			if w.Status != org.StatusActive {
 				continue
 			}

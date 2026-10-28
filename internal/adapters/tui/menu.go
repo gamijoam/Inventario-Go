@@ -56,6 +56,18 @@ var menuTabs = []menuTab{
 		{label: "Política de existencia negativa", perm: identity.PermPolicyManage, open: newPolicy,
 			info: "Si una salida puede dejar el disponible en negativo, con qué límite y para qué productos."},
 	}},
+	{"Compras", []menuItem{
+		{label: "Recepciones", perm: identity.PermPurchaseRead, open: newReceipts,
+			info: "La mercancía que llega de un proveedor: líneas con su costo, gastos (flete, seguro) y confirmación, que la entra al almacén."},
+		{label: "Órdenes de compra", perm: identity.PermPurchaseRead, open: newOrders,
+			info: "Lo pedido a un proveedor con su costo pactado; F5 en una orden abierta la recibe."},
+		{label: "Proveedores", perm: identity.PermPurchaseRead, open: newSuppliers,
+			info: "Proveedores de la organización."},
+		{label: "Costos de un producto", perm: identity.PermPurchaseRead, alt: identity.PermReplacementCost, open: newCosts,
+			info: "Costo promedio, última compra y costo de reposición de un producto."},
+		{label: "Tasas de cambio", perm: identity.PermRateRead, open: newRates,
+			info: "Tasas de cambio con su fuente, versionadas. Las compras en otra moneda se convierten con la vigente a la fecha de la factura."},
+	}},
 	{"Precios", []menuItem{
 		{label: "Precios vigentes", perm: identity.PermPriceRead, open: newPrices,
 			info: "Precio vigente por lista, el programado y la propuesta pendiente."},

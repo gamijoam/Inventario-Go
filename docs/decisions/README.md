@@ -25,5 +25,6 @@ registran cómo se implementan.
 | [0017](0017-tui-pantallas-y-backend.md) | TUI de pantallas completas sobre un puerto Backend | Aceptada |
 | [0018](0018-tui-estilo-bios-formularios-y-asistente.md) | TUI estilo BIOS, formularios y asistente de primer uso | Aceptada |
 | [0019](0019-tui-operaciones-de-inventario.md) | Operaciones de inventario en la TUI | Aceptada |
+| [0020](0020-tui-compras-y-tasas.md) | Compras y tasas en la TUI | Aceptada |
 
 Estados posibles: *Propuesta*, *Aceptada*, *Reemplazada por ADR-xxxx*, *Rechazada*.
