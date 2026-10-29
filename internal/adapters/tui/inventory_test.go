@@ -192,7 +192,7 @@ func (f *fake) RecordCount(_ context.Context, cid, product, counted, unitCost st
 	}
 	l := stock.CountLineView{CountLine: inventory.CountLine{Counted: decimal.MustParse(counted), Expected: decimal.MustParse("20")}, Product: harina, Unit: und}
 	c := f.inv().count
-	c.Lines = append(c.Lines, l)
+	c.Lines = []stock.CountLineView{l} // un producto contado de nuevo reemplaza su línea
 	return l, nil
 }
 
@@ -276,19 +276,29 @@ func TestEntryRecognizesProductAndKeepsItsKey(t *testing.T) {
 	m, _ = send(t, m, keyRight) // el inactivo no se ofrece: vuelve al primero
 	mustContain(t, m, "‹ PRINCIPAL · Principal ›")
 	m, _ = send(t, m, keyEnter)
-	m = typeText(t, m, "Harina de")
+	m = typeText(t, m, "1 kg") // parte del nombre: se ven todas las coincidencias
+	mustContain(t, m, "► HARINA Harina de maíz 1 kg (UND)", "ARROZ Arroz 1 kg (UND)", "↑↓ Elegir producto")
+	m = keys(t, m, keyDown, keyEnter) // toma ARROZ y pasa a la cantidad
+	mustContain(t, m, "→ ARROZ Arroz 1 kg (UND)")
+	m, _ = send(t, m, keyUp)
+	for range len("ARROZ") {
+		m, _ = send(t, m, keyBack)
+	}
+	m = typeText(t, m, "harina")
+	mustContain(t, m, "► HARINA Harina de maíz 1 kg (UND)")
 	m, _ = send(t, m, keyEnter)
 	mustContain(t, m, "HARINA Harina de maíz 1 kg (UND) · disponible PRINCIPAL 20")
 	m, _ = send(t, m, keyUp)
-	for range len("Harina de") {
+	for range len("HARINA") {
 		m, _ = send(t, m, keyBack)
 	}
-	m = typeText(t, m, "1 kg")
-	m, _ = send(t, m, keyEnter)
-	mustContain(t, m, "2 productos coinciden; pulse F5")
+	m = typeText(t, m, "zzz")
+	mustContain(t, m, "ningún producto activo coincide")
+	for range 3 {
+		m, _ = send(t, m, keyBack)
+	}
 
 	// F5: lista de productos, con el filtro listo.
-	m, _ = send(t, m, keyUp)
 	m, _ = send(t, m, tea.KeyPressMsg{Code: tea.KeyF5})
 	mustContain(t, m, "Elegir producto", "HARINA", "ARROZ")
 	m = typeText(t, m, "arroz")
@@ -372,7 +382,7 @@ func TestTransfer(t *testing.T) {
 	m, _ = send(t, m, keyLeft) // destino = origen
 	m, _ = send(t, m, keyDown)
 	m = typeText(t, m, "HARINA")
-	m, _ = send(t, m, keyDown)
+	m, _ = send(t, m, keyEnter) // toma la sugerencia y pasa a la cantidad
 	m = typeText(t, m, "5")
 	m, _ = send(t, m, keyF10)
 	mustContain(t, m, "el origen y el destino deben ser almacenes distintos")
@@ -500,11 +510,18 @@ func TestCountCaptureSubmitAndApprove(t *testing.T) {
 	m, _ = send(t, m, keyEnter)
 	mustContain(t, m, "HARINA contado 18 (registrado 20, diferencia -2)", "-2")
 	m = typeText(t, m, "NOEXISTE")
+	mustContain(t, m, "ningún producto activo coincide")
 	m, _ = send(t, m, keyEnter)
-	m = typeText(t, m, "1")
+	mustContain(t, m, "ningún producto activo coincide con NOEXISTE")
+	for range len("NOEXISTE") {
+		m, _ = send(t, m, keyBack)
+	}
+	m = typeText(t, m, "maíz") // por el nombre: se elige de la lista
+	mustContain(t, m, "► HARINA Harina de maíz 1 kg (UND)")
 	m, _ = send(t, m, keyEnter)
-	mustContain(t, m, "no encontrado: producto NOEXISTE")
-	if got := f.inv().counted; len(got) != 2 || got[0] != "7591234567894=18" {
+	m = typeText(t, m, "19")
+	m, _ = send(t, m, keyEnter)
+	if got := f.inv().counted; len(got) != 2 || got[0] != "HARINA=18" || got[1] != "HARINA=19" {
 		t.Fatalf("capturas: %v", got)
 	}
 

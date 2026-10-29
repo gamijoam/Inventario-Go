@@ -275,13 +275,14 @@ type countScreen struct {
 	msg     string
 	msgErr  bool
 	loading bool
+	sugg    suggester
 }
 
 func newCount(a *app, ref string) screen {
 	c := &countScreen{app: a, ref: ref, list: newList([]table.Column{{Title: "SKU", Width: 16}, {Title: "Producto", Width: 36},
 		{Title: "Registrado", Width: 12}, {Title: "Contado", Width: 12}, {Title: "Diferencia", Width: 12}, {Title: "Unidad", Width: 6}}, 1)}
 	c.inputs[0] = newInput("Producto: ", 200)
-	c.inputs[0].Placeholder = "escanee o escriba SKU / código"
+	c.inputs[0].Placeholder = "escanee o escriba nombre, SKU o código"
 	c.inputs[0].SetWidth(32)
 	c.inputs[1] = newInput("Contado: ", 32)
 	c.inputs[1].SetWidth(12)
@@ -356,6 +357,15 @@ func (c *countScreen) Update(msg tea.Msg) tea.Cmd {
 		case productInfo:
 			if v.query == c.looked {
 				c.found = v.text
+				if v.ok && c.inputs[0].Value() == v.query {
+					c.inputs[0].SetValue(v.sku) // el servicio resuelve por SKU o código
+					c.looked, c.sugg.query = v.sku, v.sku
+				}
+			}
+			return nil
+		case productMatches:
+			if c.focus == 0 {
+				c.sugg.receive(v)
 			}
 			return nil
 		case stock.CountLineView:
@@ -371,6 +381,8 @@ func (c *countScreen) Update(msg tea.Msg) tea.Cmd {
 				c.inputs[i].SetValue("")
 			}
 			c.found, c.looked = "", ""
+			c.sugg.close()
+			c.sugg.query = ""
 			return tea.Batch(c.setFocus(0), c.Refresh())
 		case stock.CountView:
 			c.loading = false
@@ -393,6 +405,24 @@ func (c *countScreen) Update(msg tea.Msg) tea.Cmd {
 			return nil
 		}
 		k := msg.String()
+		if c.capturing() && c.focus == 0 && c.sugg.active() {
+			switch k {
+			case "up", "shift+tab":
+				c.sugg.move(-1)
+				return nil
+			case "down":
+				c.sugg.move(1)
+				return nil
+			case "esc":
+				c.sugg.open = false
+				return nil
+			case "enter", "tab":
+				v, _ := c.sugg.choose()
+				c.inputs[0].SetValue(v.SKU.String())
+				c.looked, c.found = v.SKU.String(), ""
+				return tea.Batch(lookupProduct(c.app, c.id, "product", v.SKU.String(), c.v.Location.Warehouse.Code.String()), c.setFocus(1))
+			}
+		}
 		if c.capturing() {
 			switch k {
 			case "esc":
@@ -410,6 +440,10 @@ func (c *countScreen) Update(msg tea.Msg) tea.Cmd {
 					if q == "" {
 						return nil
 					}
+					if c.sugg.open && len(c.sugg.items) == 0 {
+						c.msg, c.msgErr = "ningún producto activo coincide con "+q, true
+						return nil
+					}
 					var cmd tea.Cmd
 					if q != c.looked {
 						c.looked, c.found = q, ""
@@ -421,6 +455,9 @@ func (c *countScreen) Update(msg tea.Msg) tea.Cmd {
 			}
 			var cmd tea.Cmd
 			c.inputs[c.focus], cmd = c.inputs[c.focus].Update(msg)
+			if c.focus == 0 {
+				return tea.Batch(cmd, c.sugg.changed(c.app, c.id, "product", c.inputs[0].Value()))
+			}
 			return cmd
 		}
 		if cmd, done := c.list.update(msg); done {
@@ -462,10 +499,14 @@ func (c *countScreen) View(int, int) string {
 	}
 	if c.capturing() {
 		b.WriteString(c.inputs[0].View() + "  " + c.inputs[1].View() + "  " + c.inputs[2].View() + "\n")
-		if c.found != "" {
-			b.WriteString("  " + okStyle.Render("→ "+c.found))
+		switch {
+		case c.focus == 0 && c.sugg.open:
+			b.WriteString(c.sugg.view("  "))
+		case c.found != "":
+			b.WriteString("  " + okStyle.Render("→ "+c.found) + "\n")
+		default:
+			b.WriteString("\n")
 		}
-		b.WriteString("\n")
 	}
 	switch {
 	case c.busy:

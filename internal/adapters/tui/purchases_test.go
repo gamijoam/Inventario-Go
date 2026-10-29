@@ -458,3 +458,41 @@ func TestSuppliersCostsAndRates(t *testing.T) {
 	m, _ = send(t, m, keyF10)
 	mustContain(t, m, "tasa registrada", "1 USD = 46.1 VES", "oficial BCV")
 }
+
+// En una orden nueva el producto se busca por parte del nombre: aparecen
+// todos los que coinciden, se elige uno y la línea lleva su SKU.
+func TestOrderLinesSearchByName(t *testing.T) {
+	f := newFake(buyer...)
+	m := compras(t, f)
+	m = keys(t, m, keyDown, keyEnter, keyF2, keyF10)
+	mustContain(t, m, "Nueva orden · DIST")
+	m = typeText(t, m, "1 kg")
+	mustContain(t, m, "► HARINA Harina de maíz 1 kg (UND)", "ARROZ Arroz 1 kg (UND)", "↑↓ Elegir producto")
+	m = keys(t, m, keyDown, keyEnter) // ARROZ
+	mustContain(t, m, "→ ARROZ Arroz 1 kg (UND)")
+	m = typeText(t, m, "3")
+	m, _ = send(t, m, keyEnter)
+	m = typeText(t, m, "1.2")
+	m, _ = send(t, m, keyEnter)
+	mustContain(t, m, "ARROZ Arroz 1 kg", "1 en total")
+
+	m = typeText(t, m, "nada parecido")
+	mustContain(t, m, "ningún producto activo coincide")
+	m, _ = send(t, m, keyEnter)
+	mustContain(t, m, "ningún producto activo coincide con nada parecido")
+	for range len("nada parecido") {
+		m, _ = send(t, m, keyBack)
+	}
+	m = typeText(t, m, "Harina de maíz") // el nombre completo también sirve
+	m, _ = send(t, m, keyEnter)
+	m = typeText(t, m, "2")
+	m, _ = send(t, m, keyEnter)
+	m = typeText(t, m, "9")
+	m, _ = send(t, m, keyEnter)
+	m, _ = send(t, m, keyF10)
+	in := f.buy().orderIn
+	if len(in) != 1 || len(in[0].Lines) != 2 || in[0].Lines[0].Product != "ARROZ" || in[0].Lines[1].Product != "HARINA" {
+		t.Fatalf("la orden debe llevar los SKU elegidos: %+v", in)
+	}
+	mustContain(t, m, "orden OC-000001 creada")
+}

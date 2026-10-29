@@ -120,12 +120,24 @@ en rojo: corrija y vuelva a guardar.
 
 ### El campo Producto
 
-Acepta el SKU, parte del nombre o el código de barras; un **lector de
-códigos** funciona igual que el teclado. Al salir del campo, la TUI lo
-reconoce y muestra debajo el producto, su unidad y lo disponible en los
-almacenes de la sucursal (`→ HARINA Harina PAN 1 kg (UND) · disponible
-PRINCIPAL 20`). Si no lo reconoce o coinciden varios, **F5** abre la lista:
-escriba para filtrar y **Enter** lo elige.
+Escriba parte del nombre (sin importar acentos ni mayúsculas), el SKU o el
+código de barras; un **lector de códigos** funciona igual que el teclado.
+Mientras escribe aparece la lista de productos activos que coinciden:
+
+```
+ Producto  1 kg
+           ► ARROZ Arroz Mary 1 kg (UND)
+             HARINA Harina PAN 1 kg (UND)
+```
+
+**↑/↓** eligen, **Enter** (o Tab) toma el elegido y pasa al campo
+siguiente, y **Esc** cierra la lista. Al tomarlo, la TUI muestra debajo el
+producto, su unidad y lo disponible en los almacenes de la sucursal (`→
+HARINA Harina PAN 1 kg (UND) · disponible PRINCIPAL 20`). Si nada coincide,
+lo avisa. **F5** abre la lista completa de productos.
+
+Funciona igual en los formularios, en las líneas de una orden de compra y
+en la captura de un conteo.
 
 ### El campo Almacén
 

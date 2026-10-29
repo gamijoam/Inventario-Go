@@ -54,7 +54,7 @@ func lookupProduct(a *app, to int, key, q, warehouse string) tea.Cmd {
 			}
 			return info, nil
 		}
-		info.ok = true
+		info.ok, info.sku, info.name = true, v.SKU.String(), v.Name.String()
 		info.text = fmt.Sprintf("%s %s (%s)", v.SKU, v.Name, v.Unit.Code)
 		if v.Status != catalog.StatusActive {
 			info.text += " · inactivo"
