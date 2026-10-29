@@ -3,6 +3,7 @@ package tui
 import (
 	"context"
 
+	"github.com/gamijoam/inventario-go/internal/application/auth"
 	appcatalog "github.com/gamijoam/inventario-go/internal/application/catalog"
 	apppricing "github.com/gamijoam/inventario-go/internal/application/pricing"
 	"github.com/gamijoam/inventario-go/internal/application/purchasing"
@@ -102,6 +103,36 @@ type Backend interface {
 	// EffectiveRate es la tasa del par que rige en date (AAAA-MM-DD; vacía,
 	// hoy); envuelve exchange.ErrNoRate si no hay.
 	EffectiveRate(ctx context.Context, base, quote, date string) (rates.RateView, error)
+
+	// Listas de precios de la empresa de la sesión.
+	PriceLists(ctx context.Context) ([]apppricing.ListView, error)
+	CreatePriceList(ctx context.Context, in apppricing.ListInput) (apppricing.ListView, error)
+	// SetMargin fija el margen de la lista o, con Product, el de un
+	// producto; vacío vuelve a heredar.
+	SetMargin(ctx context.Context, in apppricing.MarginInput) (apppricing.ListView, error)
+	Propose(ctx context.Context, in apppricing.ProposeInput) (apppricing.ProposalView, error)
+	CancelRevision(ctx context.Context, revisionID string) (pricing.Revision, error)
+
+	// Administración.
+	Users(ctx context.Context) ([]auth.UserView, error)
+	CreateUser(ctx context.Context, in auth.NewUserInput) (identity.User, error)
+	SetUserActive(ctx context.Context, username string, active bool) (identity.User, error)
+	Unlock(ctx context.Context, username string) error
+	ResetPassword(ctx context.Context, username, password string) error
+	// ChangePassword cambia la contraseña del usuario de la sesión.
+	ChangePassword(ctx context.Context, current, next string) error
+	Assign(ctx context.Context, username, role string, where auth.ScopeRef) (auth.AssignmentView, error)
+	Unassign(ctx context.Context, username, role string, where auth.ScopeRef) error
+	Roles(ctx context.Context) ([]identity.Role, error)
+	CreateRole(ctx context.Context, code, name string, perms []string) (identity.Role, error)
+	EditRole(ctx context.Context, code string, add, remove []string) (identity.Role, error)
+	Companies(ctx context.Context) ([]org.Company, error)
+	Branches(ctx context.Context, company string) ([]org.Branch, error)
+	// WarehousesOf lista los almacenes de una empresa y sucursal cualquiera.
+	WarehousesOf(ctx context.Context, company, branch string) ([]org.Warehouse, error)
+	CreateCompany(ctx context.Context, code, legalName, rif, currency string) (org.Company, error)
+	CreateBranch(ctx context.Context, company, code, name string) (org.Branch, error)
+	CreateWarehouse(ctx context.Context, company, branch, code, name string) (org.Warehouse, error)
 }
 
 // Session es el usuario conectado y el ámbito de esta instalación.

@@ -58,11 +58,26 @@ func (p *pricesScreen) Title() string {
 	return "Precios"
 }
 func (p *pricesScreen) Capturing() bool { return p.list.capturing() }
+func (p *pricesScreen) Wide() bool      { return true }
 func (p *pricesScreen) Help() string {
 	if p.list.capturing() {
 		return "Escriba para filtrar  Enter Fijar  Esc Borrar"
 	}
-	return "↑↓ Elegir  / Filtrar  Enter Propuesta  R Recargar  Esc Volver"
+	parts := []string{"↑↓ Elegir", "/ Filtrar", "Enter Propuesta"}
+	if p.app.can(identity.PermPricePropose) && p.list.selected() >= 0 {
+		parts = append(parts, "F2 Proponer")
+	}
+	if v := p.current(); v != nil && len(v.Scheduled) > 0 && p.app.can(identity.PermPriceApprove) {
+		parts = append(parts, "F4 Anular programado")
+	}
+	return strings.Join(append(parts, "R Recargar", "Esc Volver"), "  ")
+}
+
+func (p *pricesScreen) current() *apppricing.PriceView {
+	if i := p.list.selected(); i >= 0 {
+		return &p.items[i]
+	}
+	return nil
 }
 
 func (p *pricesScreen) Init(id int) tea.Cmd {
@@ -118,6 +133,18 @@ func (p *pricesScreen) Update(msg tea.Msg) tea.Cmd {
 				}
 				return setStatus("sin propuesta pendiente para este producto en esta lista", nil)
 			}
+		case "f2":
+			if v := p.current(); v != nil && p.app.can(identity.PermPricePropose) {
+				return push(newPropose(p.app, v.List.Code.String(), v.Product.SKU.String()))
+			}
+		case "f4":
+			if v := p.current(); v != nil && len(v.Scheduled) > 0 && p.app.can(identity.PermPriceApprove) {
+				a, r := p.app, v.Scheduled[0]
+				return push(&confirmScreen{app: a, title: "Anular precio programado",
+					message: fmt.Sprintf("Anular el precio %s %s de %s en la lista %s, programado desde %s. El vigente no cambia.",
+						r.Price, v.List.Currency, v.Product.SKU, v.List.Code, vet(timezone.InCaracas(r.EffectiveAt))),
+					ok: "precio programado anulado", run: func() (any, error) { return a.opts.Backend.CancelRevision(a.ctx, r.ID.String()) }})
+			}
 		}
 	default:
 		cmd, _ := p.list.update(msg)
@@ -130,7 +157,7 @@ func (p *pricesScreen) View(int, int) string {
 	if p.loading && len(p.items) == 0 {
 		return "Cargando…"
 	}
-	return p.list.view("Sin precios. Cree una lista con 'balanzapro price-list create' y proponga precios.")
+	return p.list.view("Sin precios. Cree una lista en Precios → Listas de precios y proponga precios.")
 }
 
 // ---------- Propuestas ----------

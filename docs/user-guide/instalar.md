@@ -67,9 +67,13 @@ argumentos:
    (45.725, oficial BCV); **F3** agrega el flete de 2 USD; **F9** confirma.
    El kardex de HARINA muestra la compra y el nuevo costo promedio.
 
-Vea [Pantalla interactiva](tui.md) para todas las teclas. Las listas de
-precios se crean por ahora con los comandos de abajo (paso 4); luego las
-propuestas se aprueban en la TUI.
+6. **Precios.** *Precios → Listas de precios*, **F2**: `GENERAL` con 25
+   % de margen. La compra del paso 5 ya habría dejado propuestas si la
+   lista existía; pruebe *Proponer precio* y apruébelo en *Propuestas de
+   precio* (**A**).
+
+Vea [Pantalla interactiva](tui.md) para todas las teclas. Los comandos de
+abajo hacen lo mismo y sirven para scripts.
 
 ## Probar de punta a punta
 
@@ -138,6 +142,11 @@ que puede aprobar, ajustar, programar o rechazar. Vea
 [Listas y precios](precios.md).
 
 ### 5. Usuarios con permisos distintos
+
+En la TUI: *Administración → Usuarios*, **F2** crea a `maria`; **Enter**
+la abre y **F2** le asigna el rol `ALMACENISTA` en la sucursal
+`PRINCIPAL`. Luego *Sistema → Cerrar sesión* y entre como `maria`: el menú
+solo muestra lo que su rol permite. Con comandos:
 
 ```powershell
 .\balanzapro.exe user create --username maria --name "María"
