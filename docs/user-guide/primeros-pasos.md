@@ -25,8 +25,11 @@ Todo se puede renombrar con flags (`--code`, `--company-code`,
 `--branch-name`, `--warehouse-name`…; ver `balanzapro setup --help`).
 `setup` solo se ejecuta una vez; la segunda vez responde con el código 6.
 
-El RIF es opcional. Se valida el formato (`J-12345678-9`, también acepta
-`j123456789`); el dígito verificador **no** se comprueba todavía.
+El RIF es opcional. Se valida el formato: letra V, E, J, P, G o C, ocho
+dígitos y el dígito final (`J-12345678-9`, también acepta `j123456789`). Si
+omite el dígito final (`V-12345678`), se calcula con la fórmula del SENIAT;
+uno escrito se guarda tal cual, sin comprobarlo todavía. Un RIF C (consejo
+comunal) se escribe siempre completo.
 
 Cada empresa valora su inventario en una moneda: USD por defecto, o VES con
 `--currency VES` (en `setup` y en `company create`). Se fija al crear la

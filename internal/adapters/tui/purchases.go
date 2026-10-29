@@ -56,9 +56,10 @@ func newSuppliers(a *app) screen {
 
 func newSupplierForm(a *app) screen {
 	f := &formScreen{app: a, title: "Nuevo proveedor",
-		info: "Código corto (DIST, POLAR). El RIF es opcional (J-12345678-9).",
+		info: "Código corto (DIST, POLAR). El RIF es opcional: V-12345678-9 para personas, J-12345678-9 para empresas; " +
+			"si omite el dígito final, se calcula.",
 		fields: []*field{textF("code", "Código", "", 16), textF("name", "Nombre", "", 120),
-			textF("rif", "RIF", "", 16).placeholder("opcional")}}
+			textF("rif", "RIF", "", 16).placeholder("opcional: V-12345678 o J-12345678-9")}}
 	f.save = func(v map[string]string) (any, error) {
 		return a.opts.Backend.CreateSupplier(a.ctx, v["code"], v["name"], v["rif"])
 	}
@@ -557,13 +558,17 @@ type orderLinesScreen struct {
 	looked string
 	busy   bool
 	errMsg string
+	sugg   suggester
+	sku    string            // producto reconocido en el campo
+	names  map[string]string // nombre de cada SKU agregado
 }
 
 func newOrderLines(a *app, h orderHeader) screen {
 	o := &orderLinesScreen{app: a, hdr: h, list: newList([]table.Column{{Title: "Producto", Width: 30}, {Title: "Cantidad", Width: 12},
 		{Title: "Costo unit.", Width: 14}}, 0)}
+	o.names = map[string]string{}
 	o.inputs[0] = newInput("Producto: ", 200)
-	o.inputs[0].Placeholder = "SKU o código"
+	o.inputs[0].Placeholder = "nombre, SKU o código"
 	o.inputs[0].SetWidth(24)
 	o.inputs[1] = newInput("Cantidad: ", 32)
 	o.inputs[1].SetWidth(10)
@@ -575,11 +580,25 @@ func newOrderLines(a *app, h orderHeader) screen {
 func (o *orderLinesScreen) Title() string   { return "Nueva orden · " + o.hdr.supplier }
 func (o *orderLinesScreen) Capturing() bool { return true }
 func (o *orderLinesScreen) Info() string {
-	return "Escriba o escanee el producto, Enter, la cantidad, Enter, el costo pactado, Enter. Repetir un producto lo " +
-		"reemplaza. F8 quita la última línea y F10 crea la orden."
+	return "Escriba parte del nombre, el SKU o el código de barras: aparecen los productos que coinciden; elija con ↑↓ y " +
+		"Enter. Luego la cantidad, Enter, el costo pactado, Enter. Repetir un producto lo reemplaza. F8 quita la última " +
+		"línea y F10 crea la orden."
 }
 func (o *orderLinesScreen) Help() string {
+	if o.focus == 0 && o.sugg.active() {
+		return "↑↓ Elegir producto  Enter Tomar  Esc Cerrar lista"
+	}
 	return "Enter Siguiente/Agregar  F8 Quitar última  F10 Crear orden  Esc Cancelar"
+}
+
+// take fija el producto reconocido en el campo.
+func (o *orderLinesScreen) take(sku, name, text string) {
+	o.sku, o.found = sku, text
+	o.names[sku] = name
+	o.inputs[0].SetValue(sku)
+	o.inputs[0].CursorEnd()
+	o.looked = sku
+	o.sugg.query = sku
 }
 
 func (o *orderLinesScreen) Init(id int) tea.Cmd {
@@ -598,7 +617,7 @@ func (o *orderLinesScreen) setFocus(i int) tea.Cmd {
 func (o *orderLinesScreen) rows() {
 	rows := make([]table.Row, len(o.lines))
 	for i, l := range o.lines {
-		rows[i] = table.Row{l.Product, l.Quantity, l.UnitCost}
+		rows[i] = table.Row{l.Product + " " + o.names[l.Product], l.Quantity, l.UnitCost}
 	}
 	o.list.setRows(rows)
 }
@@ -608,9 +627,18 @@ func (o *orderLinesScreen) Update(msg tea.Msg) tea.Cmd {
 	case tea.WindowSizeMsg:
 		o.list.resize(msg.Width, msg.Height-3)
 	case loaded:
-		if v, ok := msg.v.(productInfo); ok {
+		switch v := msg.v.(type) {
+		case productInfo:
 			if v.query == o.looked {
 				o.found = v.text
+				if v.ok {
+					o.take(v.sku, v.name, v.text)
+				}
+			}
+			return nil
+		case productMatches:
+			if o.focus == 0 {
+				o.sugg.receive(v)
 			}
 			return nil
 		}
@@ -623,6 +651,23 @@ func (o *orderLinesScreen) Update(msg tea.Msg) tea.Cmd {
 	case tea.KeyPressMsg:
 		if o.busy {
 			return nil
+		}
+		if o.focus == 0 && o.sugg.active() {
+			switch msg.String() {
+			case "up", "shift+tab":
+				o.sugg.move(-1)
+				return nil
+			case "down":
+				o.sugg.move(1)
+				return nil
+			case "esc":
+				o.sugg.open = false
+				return nil
+			case "enter", "tab":
+				v, _ := o.sugg.choose()
+				o.take(v.SKU.String(), v.Name.String(), fmt.Sprintf("%s %s (%s)", v.SKU, v.Name, v.Unit.Code))
+				return o.setFocus(1)
+			}
 		}
 		switch msg.String() {
 		case "esc":
@@ -652,19 +697,26 @@ func (o *orderLinesScreen) Update(msg tea.Msg) tea.Cmd {
 				if q == "" {
 					return nil
 				}
+				if o.sugg.open && len(o.sugg.items) == 0 {
+					o.errMsg = "ningún producto activo coincide con " + q
+					return nil
+				}
 				var cmd tea.Cmd
 				if q != o.looked {
-					o.looked, o.found = q, ""
+					o.looked, o.found, o.sku = q, "", ""
 					cmd = lookupProduct(o.app, o.id, "product", q, "")
 				}
 				return tea.Batch(cmd, o.setFocus(1))
 			case 1:
 				return o.setFocus(2)
 			}
-			l := purchasing.LineInput{Product: strings.ToUpper(strings.TrimSpace(o.inputs[0].Value())),
-				Quantity: strings.TrimSpace(o.inputs[1].Value()), UnitCost: strings.TrimSpace(o.inputs[2].Value())}
-			if l.Product == "" || l.Quantity == "" || l.UnitCost == "" {
-				o.errMsg = "indique producto, cantidad y costo"
+			l := purchasing.LineInput{Product: o.sku, Quantity: strings.TrimSpace(o.inputs[1].Value()), UnitCost: strings.TrimSpace(o.inputs[2].Value())}
+			if l.Product == "" {
+				o.errMsg = "elija el producto de la lista de coincidencias"
+				return o.setFocus(0)
+			}
+			if l.Quantity == "" || l.UnitCost == "" {
+				o.errMsg = "indique cantidad y costo"
 				return nil
 			}
 			o.errMsg = ""
@@ -681,11 +733,19 @@ func (o *orderLinesScreen) Update(msg tea.Msg) tea.Cmd {
 			for i := range o.inputs {
 				o.inputs[i].SetValue("")
 			}
-			o.found, o.looked = "", ""
+			o.found, o.looked, o.sku = "", "", ""
+			o.sugg.close()
+			o.sugg.query = ""
 			return o.setFocus(0)
 		}
 		var cmd tea.Cmd
 		o.inputs[o.focus], cmd = o.inputs[o.focus].Update(msg)
+		if o.focus == 0 {
+			if strings.TrimSpace(o.inputs[0].Value()) != o.sku {
+				o.sku, o.found = "", ""
+			}
+			return tea.Batch(cmd, o.sugg.changed(o.app, o.id, "product", o.inputs[0].Value()))
+		}
 		return cmd
 	}
 	return nil
@@ -699,10 +759,14 @@ func (o *orderLinesScreen) View(int, int) string {
 	}
 	b.WriteString("Proveedor " + o.hdr.supplier + " · costos en " + cur + "\n")
 	b.WriteString(o.inputs[0].View() + "  " + o.inputs[1].View() + "  " + o.inputs[2].View() + "\n")
-	if o.found != "" {
-		b.WriteString("  " + okStyle.Render("→ "+o.found))
+	switch {
+	case o.focus == 0 && o.sugg.open:
+		b.WriteString(o.sugg.view("  "))
+	case o.found != "":
+		b.WriteString("  " + okStyle.Render("→ "+o.found) + "\n")
+	default:
+		b.WriteString("\n")
 	}
-	b.WriteString("\n")
 	switch {
 	case o.busy:
 		b.WriteString("Guardando…\n")

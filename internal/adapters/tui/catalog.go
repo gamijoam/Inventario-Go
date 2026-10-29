@@ -22,11 +22,11 @@ func newSetupWizard(a *app) screen {
 		intro: "Bienvenido a BalanzaPro. Indique los datos de su negocio y del usuario administrador.",
 		info: "Se crea la base de datos con la organización, la empresa, la sucursal y el almacén PRINCIPAL, y el usuario " +
 			"administrador, que queda con la sesión iniciada. La moneda de valoración del inventario no se puede cambiar después. " +
-			"El RIF es opcional (J-12345678-9).",
+			"El RIF es opcional: V-12345678-9 o J-12345678-9; si omite el dígito final, se calcula.",
 		fields: []*field{
 			textF("name", "Nombre del negocio", "", 120).placeholder("Bodega Ana"),
 			textF("legal", "Razón social", "", 120).placeholder("opcional: Bodega Ana, C.A."),
-			textF("rif", "RIF", "", 16).placeholder("opcional: J-12345678-9"),
+			textF("rif", "RIF", "", 16).placeholder("opcional: V-12345678 o J-12345678-9"),
 			choiceF("currency", "Moneda de valoración", []string{"USD", "VES"}, "USD"),
 			textF("user", "Usuario administrador", "admin", 64),
 			textF("display", "Nombre visible", "Administrador", 120),

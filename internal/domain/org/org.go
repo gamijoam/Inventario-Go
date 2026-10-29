@@ -71,18 +71,55 @@ func ParseName(s string) (Name, error) {
 func (n Name) String() string { return n.v }
 
 // RIF es el Registro de Información Fiscal venezolano en forma canónica
-// L-NNNNNNNN-D. Solo se valida el formato: el dígito verificador y el uso
-// fiscal quedan pendientes de validación profesional (sección 22.3).
+// L-NNNNNNNN-D. Si falta el dígito verificador se calcula con la fórmula
+// del SENIAT (ratificado 2026-10-29); uno escrito se conserva tal cual: su
+// verificación y el uso fiscal quedan pendientes de validación profesional
+// (sección 22.3).
 type RIF struct{ v string }
 
-var rifPattern = regexp.MustCompile(`^([VEJPGC])-?(\d{8})-?(\d)$`)
+var rifPattern = regexp.MustCompile(`^([VEJPGC])-?(\d{8})(?:-?(\d))?$`)
 
+// rifLetter es el valor de cada tipo de contribuyente en la fórmula del
+// dígito verificador. C (consejos comunales) no tiene uno confirmado: su
+// dígito se escribe siempre.
+var rifLetter = map[byte]int{'V': 1, 'E': 2, 'J': 3, 'P': 4, 'G': 5}
+
+// rifCheckDigit calcula el dígito verificador: el valor de la letra por 4
+// más cada dígito por 3, 2, 7, 6, 5, 4, 3, 2; luego 11 menos el resto de
+// dividir entre 11, y 0 si da 10 u 11.
+func rifCheckDigit(letter byte, digits string) (byte, bool) {
+	v, ok := rifLetter[letter]
+	if !ok {
+		return 0, false
+	}
+	sum := v * 4
+	for i, w := range []int{3, 2, 7, 6, 5, 4, 3, 2} {
+		sum += int(digits[i]-'0') * w
+	}
+	d := 11 - sum%11
+	if d >= 10 {
+		d = 0
+	}
+	return byte('0' + d), true
+}
+
+// ParseRIF admite J-12345678-9, j123456789 o, sin el dígito final,
+// J-12345678.
 func ParseRIF(s string) (RIF, error) {
 	m := rifPattern.FindStringSubmatch(strings.ToUpper(strings.TrimSpace(s)))
 	if m == nil {
-		return RIF{}, fmt.Errorf("%w: RIF %q (formato J-12345678-9; letras V, E, J, P, G o C)", ErrInvalid, s)
+		return RIF{}, fmt.Errorf("%w: RIF %q (formato V-12345678-9 o J-12345678-9: letra V, E, J, P, G o C, 8 dígitos y "+
+			"el dígito final, que se calcula si lo omite)", ErrInvalid, s)
 	}
-	return RIF{m[1] + "-" + m[2] + "-" + m[3]}, nil
+	check := m[3]
+	if check == "" {
+		d, ok := rifCheckDigit(m[1][0], m[2])
+		if !ok {
+			return RIF{}, fmt.Errorf("%w: RIF %q: escriba el dígito final de un RIF %s", ErrInvalid, s, m[1])
+		}
+		check = string(d)
+	}
+	return RIF{m[1] + "-" + m[2] + "-" + check}, nil
 }
 
 func (r RIF) String() string { return r.v }

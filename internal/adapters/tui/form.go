@@ -38,6 +38,8 @@ type field struct {
 	looked string
 	found  string
 	ok     bool
+	// sugg son las coincidencias mientras se escribe el producto.
+	sugg suggester
 }
 
 func textF(key, label, value string, limit int) *field {
@@ -140,6 +142,7 @@ type productInfo struct {
 	key, query string
 	text       string
 	ok         bool
+	sku, name  string // del producto reconocido
 }
 
 // pickedProduct es el producto elegido en la lista (F5).
@@ -161,7 +164,10 @@ func (f *formScreen) Info() string    { return f.info }
 func (f *formScreen) Capturing() bool { return true }
 func (f *formScreen) Help() string {
 	if cur := f.fields[f.focus]; cur.kind == productField {
-		return "↑↓ Campo  F5 Lista de productos  Enter Siguiente  F10 Guardar  Esc Cancelar"
+		if cur.sugg.active() {
+			return "↑↓ Elegir producto  Enter Tomar  Esc Cerrar lista  F5 Lista completa"
+		}
+		return "Escriba para buscar  F5 Lista de productos  Enter Siguiente  F10 Guardar  Esc Cancelar"
 	}
 	return "↑↓ Campo  ←→ Opción  Enter Siguiente  F10 Guardar  Esc Cancelar"
 }
@@ -183,6 +189,7 @@ func (f *formScreen) focusField(i int) tea.Cmd {
 	cmd := f.lookup(f.fields[f.focus])
 	for _, fl := range f.fields {
 		fl.input.Blur()
+		fl.sugg.open = false
 	}
 	f.focus = (i + len(f.fields)) % len(f.fields)
 	if fl := f.fields[f.focus]; fl.kind != choiceField {
@@ -238,7 +245,14 @@ func (f *formScreen) Update(msg tea.Msg) tea.Cmd {
 			if fl := f.field(v.key); fl != nil {
 				fl.input.SetValue(v.sku)
 				fl.input.CursorEnd()
+				fl.sugg.close()
+				fl.sugg.query = v.sku
 				return f.lookup(fl)
+			}
+			return nil
+		case productMatches:
+			if fl := f.field(v.key); fl != nil && fl == f.fields[f.focus] {
+				fl.sugg.receive(v)
 			}
 			return nil
 		case prepared:
@@ -266,6 +280,27 @@ func (f *formScreen) Update(msg tea.Msg) tea.Cmd {
 			return nil
 		}
 		cur := f.fields[f.focus]
+		if cur.kind == productField && cur.sugg.active() {
+			switch msg.String() {
+			case "up", "shift+tab":
+				cur.sugg.move(-1)
+				return nil
+			case "down":
+				cur.sugg.move(1)
+				return nil
+			case "esc":
+				cur.sugg.open = false
+				return nil
+			case "enter", "tab":
+				v, _ := cur.sugg.choose()
+				cur.input.SetValue(v.SKU.String())
+				cur.input.CursorEnd()
+				if f.focus == len(f.fields)-1 {
+					return f.lookup(cur)
+				}
+				return f.focusField(f.focus + 1)
+			}
+		}
 		switch msg.String() {
 		case "f5":
 			if cur.kind == productField {
@@ -303,6 +338,9 @@ func (f *formScreen) Update(msg tea.Msg) tea.Cmd {
 		if cur.kind != choiceField {
 			var cmd tea.Cmd
 			cur.input, cmd = cur.input.Update(msg)
+			if cur.kind == productField {
+				return tea.Batch(cmd, cur.sugg.changed(f.app, f.id, cur.key, cur.input.Value()))
+			}
 			return cmd
 		}
 	}
@@ -332,8 +370,12 @@ func (f *formScreen) View(width, _ int) string {
 		} else {
 			b.WriteString(" " + labelStyle.Render(label) + "  " + val + "\n")
 		}
+		pad := strings.Repeat(" ", labelW+3)
+		if fl.kind == productField && i == f.focus && fl.sugg.open {
+			b.WriteString(fl.sugg.view(pad))
+			continue
+		}
 		if fl.kind == productField && fl.found != "" {
-			pad := strings.Repeat(" ", labelW+3)
 			if fl.ok {
 				b.WriteString(pad + okStyle.Render("→ "+fl.found) + "\n")
 			} else {

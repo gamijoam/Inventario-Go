@@ -229,10 +229,11 @@ type fake struct {
 }
 
 var (
-	harina = catalog.Product{ID: id.MustNew(), SKU: mustSKU("HARINA"), Name: mustName("Harina de maíz 1 kg"), Status: catalog.StatusActive}
-	und    = catalog.Unit{Code: "UND", Scale: 0}
-	list   = pricing.List{Code: mustCode("GENERAL"), Name: "General", Currency: money.USD, Status: org.StatusActive}
-	ten    = decimal.MustParse("10")
+	harina = catalog.Product{ID: id.MustNew(), SKU: mustSKU("HARINA"), Name: mustName("Harina de maíz 1 kg"), Status: catalog.StatusActive,
+		Barcodes: []catalog.Barcode{mustBarcode("7591234567894")}}
+	und  = catalog.Unit{Code: "UND", Scale: 0}
+	list = pricing.List{Code: mustCode("GENERAL"), Name: "General", Currency: money.USD, Status: org.StatusActive}
+	ten  = decimal.MustParse("10")
 	// kardexMove es el movimiento del kardex del fake.
 	kardexMove = id.MustNew()
 )
@@ -243,6 +244,14 @@ func mustSKU(s string) catalog.SKU {
 		panic(err)
 	}
 	return v
+}
+
+func mustBarcode(s string) catalog.Barcode {
+	b, err := catalog.ParseBarcode(s)
+	if err != nil {
+		panic(err)
+	}
+	return b
 }
 
 func mustName(s string) org.Name {
@@ -304,7 +313,11 @@ func (f *fake) Products(_ context.Context, search string) ([]appcatalog.ProductV
 	var out []appcatalog.ProductView
 	q := strings.ToLower(search)
 	for _, v := range f.products {
-		if strings.Contains(strings.ToLower(v.SKU.String()+" "+v.Name.String()), q) {
+		text := v.SKU.String() + " " + v.Name.String()
+		for _, b := range v.Barcodes {
+			text += " " + b.String()
+		}
+		if strings.Contains(strings.ToLower(text), q) {
 			out = append(out, v)
 		}
 	}
