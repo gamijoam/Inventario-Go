@@ -39,7 +39,7 @@ inicial**:
 |---|---|
 | Nombre del negocio | Obligatorio, p. ej. `Bodega Ana` |
 | Razón social | Opcional; vacío usa el nombre |
-| RIF | Opcional, `J-12345678-9` |
+| RIF | Opcional: `V-12345678-9` o `J-12345678-9`; si omite el dígito final, se calcula |
 | Moneda de valoración | **USD** o **VES** (←/→). Es la moneda del costo del inventario y **no se cambia después** |
 | Usuario administrador | `admin` por defecto |
 | Nombre visible | Cómo lo saluda la TUI |

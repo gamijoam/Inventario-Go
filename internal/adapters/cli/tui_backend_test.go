@@ -489,3 +489,34 @@ func TestTUIPricingAndAdministration(t *testing.T) {
 		t.Fatalf("login con la contraseña nueva: %d %s", r.code, r.stderr)
 	}
 }
+
+// Un proveedor persona natural se registra con su cédula: el dígito final
+// del RIF se calcula si no se escribe.
+func TestTUISupplierRIFWithoutCheckDigit(t *testing.T) {
+	admin := setupSQLite(t)
+	o := admin
+	o.interactive = true
+	o.tui = func(opts tui.Options) {
+		ctx := context.Background()
+		b := opts.Backend
+		if _, err := b.Resume(ctx); err != nil {
+			t.Fatalf("sesión: %v", err)
+		}
+		s, err := b.CreateSupplier(ctx, "pedro", "Pedro Pérez", "v-12345678")
+		if err != nil || s.RIF.String() != "V-12345678-1" {
+			t.Fatalf("proveedor V sin dígito: %+v %v", s, err)
+		}
+		if s, err := b.CreateSupplier(ctx, "ana", "Ana", "V-11111111-9"); err != nil || s.RIF.String() != "V-11111111-9" {
+			t.Fatalf("el dígito escrito se conserva: %+v %v", s, err)
+		}
+		if _, err := b.CreateSupplier(ctx, "x", "X", "V-1234"); err == nil || !strings.Contains(err.Error(), "V-12345678-9") {
+			t.Fatalf("RIF corto: %v", err)
+		}
+	}
+	if r := run(t, o); r.code != cli.ExitOK {
+		t.Fatalf("tui: %d %s", r.code, r.stderr)
+	}
+	if r := run(t, admin, "purchase", "supplier", "create", "--code", "luis", "--name", "Luis", "--rif", "V87654321"); r.code != cli.ExitOK || !strings.Contains(r.stdout, "LUIS") {
+		t.Fatalf("CLI: %d %s %s", r.code, r.stdout, r.stderr)
+	}
+}

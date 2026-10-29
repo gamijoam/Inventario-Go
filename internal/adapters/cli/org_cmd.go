@@ -124,7 +124,7 @@ func newSetupCmd(env Env, flags *globalFlags) *cobra.Command {
 	f.StringVar(&in.OrganizationName, "name", "", "nombre del negocio (obligatorio en una instalación nueva)")
 	f.StringVar(&in.OrganizationCode, "code", "", "código de la organización (por defecto, derivado del nombre)")
 	f.StringVar(&in.CompanyLegalName, "legal-name", "", "razón social de la empresa (por defecto, el nombre)")
-	f.StringVar(&in.RIF, "rif", "", "RIF de la empresa, p. ej. J-12345678-9 (opcional)")
+	f.StringVar(&in.RIF, "rif", "", "RIF de la empresa, p. ej. J-12345678-9; sin el dígito final, se calcula (opcional)")
 	f.StringVar(&in.Currency, "currency", "USD", "moneda de valoración del inventario de la empresa: USD o VES (no se puede cambiar)")
 	f.StringVar(&in.CompanyCode, "company-code", "PRINCIPAL", "código de la empresa")
 	f.StringVar(&in.BranchName, "branch-name", "Principal", "nombre de la sucursal")
@@ -278,7 +278,7 @@ func newCompanyCmd(env Env, flags *globalFlags) *cobra.Command {
 	}
 	create.Flags().StringVar(&code, "code", "", "código único en la organización (obligatorio)")
 	create.Flags().StringVar(&legalName, "legal-name", "", "razón social (obligatoria)")
-	create.Flags().StringVar(&rif, "rif", "", "RIF, p. ej. J-12345678-9 (opcional)")
+	create.Flags().StringVar(&rif, "rif", "", "RIF, p. ej. J-12345678-9; sin el dígito final, se calcula (opcional)")
 	create.Flags().StringVar(&currency, "currency", "", "moneda de valoración del inventario: USD o VES (por defecto USD; no se puede cambiar)")
 	markRequired(create, "code", "legal-name")
 	cmd.AddCommand(create)

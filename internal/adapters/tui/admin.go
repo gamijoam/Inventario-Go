@@ -772,7 +772,7 @@ func newCompanyForm(a *app) screen {
 	f := &formScreen{app: a, title: "Nueva empresa",
 		info: "Una empresa legal con su RIF y su moneda de valoración (no se cambia después). Luego créele una sucursal.",
 		fields: []*field{textF("code", "Código", "", 16), textF("legal", "Razón social", "", 120),
-			textF("rif", "RIF", "", 16).placeholder("opcional: J-12345678-9"), choiceF("currency", "Moneda de valoración", []string{"USD", "VES"}, "USD")}}
+			textF("rif", "RIF", "", 16).placeholder("opcional: V-12345678 o J-12345678-9"), choiceF("currency", "Moneda de valoración", []string{"USD", "VES"}, "USD")}}
 	f.save = func(v map[string]string) (any, error) {
 		return a.opts.Backend.CreateCompany(a.ctx, v["code"], v["legal"], v["rif"], v["currency"])
 	}

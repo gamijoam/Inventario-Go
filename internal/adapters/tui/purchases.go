@@ -56,9 +56,10 @@ func newSuppliers(a *app) screen {
 
 func newSupplierForm(a *app) screen {
 	f := &formScreen{app: a, title: "Nuevo proveedor",
-		info: "Código corto (DIST, POLAR). El RIF es opcional (J-12345678-9).",
+		info: "Código corto (DIST, POLAR). El RIF es opcional: V-12345678-9 para personas, J-12345678-9 para empresas; " +
+			"si omite el dígito final, se calcula.",
 		fields: []*field{textF("code", "Código", "", 16), textF("name", "Nombre", "", 120),
-			textF("rif", "RIF", "", 16).placeholder("opcional")}}
+			textF("rif", "RIF", "", 16).placeholder("opcional: V-12345678 o J-12345678-9")}}
 	f.save = func(v map[string]string) (any, error) {
 		return a.opts.Backend.CreateSupplier(a.ctx, v["code"], v["name"], v["rif"])
 	}

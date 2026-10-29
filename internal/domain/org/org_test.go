@@ -60,9 +60,29 @@ func TestParseRIFNormalizesFormat(t *testing.T) {
 			t.Errorf("ParseRIF(%q) = %q, %v; se esperaba %q", in, r, err, want)
 		}
 	}
-	for _, in := range []string{"", "X-12345678-9", "J-1234567-9", "J-123456789-0", "J-12345678", "12345678-9", "J_12345678_9"} {
+	for _, in := range []string{"", "X-12345678-9", "J-1234567-9", "J-123456789-0", "12345678-9", "J_12345678_9", "C-12345678", "V-12345678-"} {
 		if _, err := org.ParseRIF(in); !errors.Is(err, org.ErrInvalid) {
 			t.Errorf("ParseRIF(%q) debía fallar, obtuvo %v", in, err)
+		}
+	}
+	// Sin el dígito final, se calcula con la fórmula del SENIAT; el escrito
+	// se conserva.
+	computed := map[string]string{
+		"G-20000041":   "G-20000041-4", // RIF publicado del SENIAT
+		"g20000041":    "G-20000041-4",
+		"V-12345678":   "V-12345678-1",
+		"V-01234567":   "V-01234567-0",
+		"E-87654321":   "E-87654321-7",
+		"J-30000000":   "J-30000000-1",
+		"J-12345678":   "J-12345678-4",
+		"J-00002961":   "J-00002961-0", // resto 1: 11 - 1 = 10 → 0
+		"P-11111111":   "P-11111111-7",
+		"V-12345678-9": "V-12345678-9",
+	}
+	for in, want := range computed {
+		r, err := org.ParseRIF(in)
+		if err != nil || r.String() != want {
+			t.Errorf("ParseRIF(%q) = %q, %v; se esperaba %q", in, r, err, want)
 		}
 	}
 	if !(org.RIF{}).IsZero() {

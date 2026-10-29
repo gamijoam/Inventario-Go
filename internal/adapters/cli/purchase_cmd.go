@@ -362,7 +362,7 @@ func newSupplierCmd(env Env, flags *globalFlags) *cobra.Command {
 	}
 	create.Flags().StringVar(&code, "code", "", "código único (obligatorio)")
 	create.Flags().StringVar(&name, "name", "", "razón social o nombre (obligatorio)")
-	create.Flags().StringVar(&rif, "rif", "", "RIF (opcional)")
+	create.Flags().StringVar(&rif, "rif", "", "RIF, p. ej. V-12345678-9; sin el dígito final, se calcula (opcional)")
 	markRequired(create, "code", "name")
 	cmd.AddCommand(create)
 	cmd.AddCommand(&cobra.Command{
